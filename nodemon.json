@@ -1,0 +1,6 @@
+{
+    "ext": "zig",
+    "watch": ["src/*.zig", "build.zig"],
+    "exec": "zig build test"
+}
+
