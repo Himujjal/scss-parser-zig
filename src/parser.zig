@@ -86,8 +86,8 @@ pub const Parser = struct {
 
     pub fn parse(self: *Self, code: []const u8) *Self {
         std.debug.print("\nCode: {s}\n", .{code});
-        const s = self.scannerInstance.scan(code);
-        s.printTokens();
+        // const s = self.scannerInstance.scan(code);
+        // _ = s;
         return self;
     }
 

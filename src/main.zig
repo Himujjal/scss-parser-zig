@@ -2,6 +2,8 @@ const std = @import("std");
 const expect = std.testing.expect;
 const parser = @import("./parser.zig");
 
+const scanner = @import("./scanner.zig");
+
 const ArrayList = std.ArrayList;
 const Allocator = std.mem.Allocator;
 
@@ -16,20 +18,23 @@ pub fn parseText(allocator: Allocator, text: []const u8, options: ParserOptions)
     return p.*;
 }
 
-test "Parse Test" {
-    const str: []const u8 = "p { font-size: 1px; }";
-    var allocator = std.testing.allocator;
-    var p = parseText(allocator, str, .{});
-
-    const out = p.tree.toString();
-
-    try expect(
-        std.mem.eql(u8, out,
-            \\Div
-            \\  Children
-            \\      Text
-            \\          Hello Svelte
-        ),
-    );
-    p.deinit();
+test "Parser" {
+    _ = scanner;
 }
+// test "Parse Test" {
+//     const str: []const u8 = "p { font-size: 1px; }";
+//     var allocator = std.testing.allocator;
+//     var p = parseText(allocator, str, .{});
+
+//     const out = p.tree.toString();
+
+//     try expect(
+//         std.mem.eql(u8, out,
+//             \\Div
+//             \\  Children
+//             \\      Text
+//             \\          Hello Svelte
+//         ),
+//     );
+//     p.deinit();
+// }
