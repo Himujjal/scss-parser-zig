@@ -1,6 +1,7 @@
 const std = @import("std");
 const expect = std.testing.expect;
 const parser = @import("./parser.zig");
+const renderer = @import("./renderer.zig");
 
 const scanner = @import("./scanner.zig");
 
@@ -20,6 +21,8 @@ pub fn parseText(allocator: Allocator, text: []const u8, options: ParserOptions)
 
 test "Parser" {
     _ = scanner;
+    _ = parser;
+    _ = renderer;
 }
 // test "Parse Test" {
 //     const str: []const u8 = "p { font-size: 1px; }";

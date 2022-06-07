@@ -10,7 +10,7 @@ const ArrayList = std.ArrayList;
 const Token = token.Token;
 const TokenType = token.TokenType;
 const Error = _error.Error;
-const ParserErrorType = _error.ParserErrorType;
+const ParserErrorType = _error.ScannerErrorType;
 
 pub const Scanner = struct {
     const Self = @This();
@@ -32,10 +32,13 @@ pub const Scanner = struct {
     cursor: usize = 0,
 
     /// line number of the cursor
-    line: usize = 0,
-
+    start_line: usize = 1,
     /// column number
-    col: usize = 0,
+    start_col: usize = 1,
+    /// line number of the cursor
+    end_line: usize = 1,
+    /// column number
+    end_col: usize = 1,
 
     raw_text_offset: usize = 0,
 
@@ -62,9 +65,11 @@ pub const Scanner = struct {
         self.code = code;
         while (!self.end()) {
             self.start = self.cursor;
+            self.start_line = self.end_line;
+            self.start_col = self.end_col;
             self.scanToken() catch continue;
         }
-        self.addTok(TokenType.EOF, 0, 0);
+        self.addTok(TokenType.EOF, code.len, code.len);
         return self;
     }
 
@@ -137,6 +142,9 @@ pub const Scanner = struct {
                     return self.addToken(.DelimToken);
                 }
             },
+            '=' => {
+                self.addToken(TT.EqualToken);
+            },
             '-' => {
                 var t = try self.consumeNumeric();
                 if (t != TokenType.ErrorToken) {
@@ -168,8 +176,17 @@ pub const Scanner = struct {
                     self.addToken(.DelimToken);
                 }
             },
-
-            '$', '*', '^', '~' => {
+            '*' => {
+                const t = try self.lookSuperAhead();
+                if (t == '=') {
+                    try self.move(2);
+                    self.addToken(TT.SubstringMatchToken);
+                } else {
+                    try self.advance();
+                    self.addToken(TT.StarToken);
+                }
+            },
+            '$', '^', '~' => {
                 const t = try self.consumeMatch();
                 if (t != TT.ErrorToken) {
                     self.addToken(t);
@@ -401,7 +418,9 @@ pub const Scanner = struct {
     fn consumeAtKeywordToken(self: *Self) ParserErrorType!bool {
         // expect to be on an '@'
         try self.advance();
-        if (!try self.consumeIdentToken()) {
+        const is_ident_token = try self.consumeIdentToken();
+
+        if (!is_ident_token) {
             try self.move(-1);
             return false;
         }
@@ -782,9 +801,17 @@ pub const Scanner = struct {
     }
 
     fn move(self: *Self, n: i32) ParserErrorType!void {
-        const newPos = @intCast(usize, @intCast(i32, self.cursor) + n);
+        const newPos: usize = @intCast(usize, @intCast(i32, self.cursor) + n);
         if (self.code.len < newPos) {
             return error.EOFError;
+        }
+        var i: usize = 0;
+        while (i < n) : (i += 1) {
+            self.end_col += 1;
+            if (self.code[self.cursor + i] == '\n') {
+                self.end_line += 1;
+                self.end_col = 1;
+            }
         }
         self.cursor = newPos;
     }
@@ -810,16 +837,29 @@ pub const Scanner = struct {
         self.addToken(tok_type);
     }
 
-    fn addTok(self: *Self, tok_type: TokenType, start: usize, endPos: usize) void {
-        self.tokens.append(Token{
+    fn addTok(self: *Self, tok_type: TokenType, start: usize, end_pos: usize) void {
+        const tok = self.getTok(tok_type, start, end_pos);
+        self.tokens.append(tok) catch unreachable;
+    }
+
+    fn getTok(self: *Self, tok_type: TokenType, start: usize, end_pos: usize) Token {
+        return Token{
             .start = start + self.raw_text_offset,
-            .end = endPos + self.raw_text_offset,
+            .end = end_pos + self.raw_text_offset,
+            .start_line = self.start_line,
+            .start_col = self.start_col,
+            .end_line = self.end_line,
+            .end_col = self.end_col,
             .tok_type = tok_type,
-        }) catch unreachable;
+        };
+    }
+
+    fn getToken(self: *Self, tok_type: TokenType) Token {
+        return self.getTok(tok_type, self.start, self.cursor);
     }
 
     pub fn addToken(self: *Self, tok_type: TokenType) void {
-        self.addTok(tok_type, self.start, self.cursor);
+        self.tokens.append(self.getToken(tok_type)) catch unreachable;
     }
 
     pub fn addError(self: *Self, message: []const u8) void {
@@ -885,6 +925,7 @@ const TokenTest = struct {
 
 test "Scanner" {
     const TT = TokenType;
+    const WS = TT.WhitespaceToken;
 
     var tokenTests = [_]TokenTest{
         .{
@@ -994,9 +1035,9 @@ test "Scanner" {
             .lexemes = &.{ "||", "" },
         },
         .{
-            .css = "<!-- -->",
-            .ttypes = &[_]TT{ .CDOToken, .WhitespaceToken, .CDCToken, .EOF },
-            .lexemes = &.{ "<!--", " ", "-->", "" },
+            .css = "<!-- Hello World -->",
+            .ttypes = &[_]TT{ .CDOToken, WS, .IdentToken, WS, .IdentToken, WS, .CDCToken, .EOF },
+            .lexemes = &.{ "<!--", " ", "Hello", " ", "World", " ", "-->", "" },
         },
         .{
             .css = "U+1234",

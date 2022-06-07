@@ -1,4 +1,6 @@
 const std = @import("std");
+const utils = @import("./utils.zig");
+const RadixTree = @import("./radix_tree.zig").StringRadixTree;
 
 const Allocator = std.mem.Allocator;
 
@@ -19,11 +21,13 @@ pub const TokenType = enum {
     PercentageToken, // 5%
     DimensionToken, // 5em
     UnicodeRangeToken, // U+554A
+    EqualToken, // = 
     IncludeMatchToken, // ~=
     DashMatchToken, // |=
     PrefixMatchToken, // ^=
     SuffixMatchToken, // $=
     SubstringMatchToken, // *=
+    StarToken, // *
     ColumnToken, // ||
     WhitespaceToken, // space \t \r \n \f
     CDOToken, // <!--
@@ -44,6 +48,35 @@ pub const TokenType = enum {
     EOF, // "EOF"
 };
 
+pub const AtKeywordTypes = enum {
+    Charset,
+    Import,
+    Namespace,
+    Media,
+    Supports,
+    Document,
+    Page,
+    Layer,
+    FontFace,
+    Keyframes,
+    Viewport,
+    CounterStyle,
+    FontFeatureValue,
+    Alternates,
+    Property,
+    ColorProfile,
+    Custom,
+
+    const KV = struct { val: []const u8, key_type: AtKeywordTypes };
+    const ATKT = AtKeywordTypes;
+
+    pub fn getAtKeyWordTypeFromTok(_a: Allocator, tok: Token, code: []const u8, radix_tree: RadixTree(ATKT)) AtKeywordTypes {
+        const token_string: []const u8 = code[(tok.start + 1)..(tok.end)];
+        const token_string_lower = utils.toLower(_a, token_string);
+        return radix_tree.get(token_string_lower) orelse AtKeywordTypes.Custom;
+    }
+};
+
 pub const Token = struct {
     const Self = @This();
 
@@ -54,6 +87,11 @@ pub const Token = struct {
 
     /// end of the token in the string stream
     end: usize = 0,
+
+    start_line: usize = 0,
+    start_col: usize = 0,
+    end_line: usize = 0,
+    end_col: usize = 0,
 
     pub fn toString(
         self: *const @This(),
