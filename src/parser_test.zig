@@ -12,7 +12,11 @@ test "Parser Tests" {
         .parse_rule_prelude = true,
         .skip_ws_comments = false,
     });
+
+
     defer p.deinit();
 
-    _ = p.parse("a{x:y;}", false);
+    p = p.parse("a{x:y;}", false).*;
+
+    try expect(p.errors.items.len == 0);
 }

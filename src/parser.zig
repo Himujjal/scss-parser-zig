@@ -156,6 +156,9 @@ pub const Parser = struct {
 
     pub fn parse(p: *Parser, code: []const u8, is_inline: bool) *Self {
         _ = p.scanner_instance.scan(code);
+
+        p.scanner_instance.printTokens();
+
         p.code = code;
         p.options.is_inline = is_inline;
 
@@ -251,7 +254,7 @@ pub const Parser = struct {
     }
 
     fn end(p: *Parser) bool {
-        return p.tokens.items.len <= p.cursor;
+        return (p.tokens.items.len - 1) <= p.cursor;
     }
 
     fn getTokenString(p: *Parser, tok: Token) []const u8 {
@@ -393,7 +396,7 @@ pub const Parser = struct {
         const _start = p.start;
 
         const prelude = p.parsePrelude();
-        if (prelude == null) return null; 
+        if (prelude == null) return null;
 
         if (p.end()) {
             p.cursor = _start;
@@ -405,6 +408,7 @@ pub const Parser = struct {
         var rule: Rule = Rule.init(p._a);
         rule.prelude = prelude.?;
         rule.block = block;
+
         p.addLocation(&rule.loc, _start);
         return rule;
     }
@@ -677,20 +681,20 @@ pub const Parser = struct {
         var selector_list = SelectorList.init(p._a);
         const _start = p.start;
 
-        while (p.current().tok_type != TT.LeftBraceToken and !p.end()) {
+        var curr = p.current();
+
+        while (curr.tok_type != TT.LeftBraceToken and !p.end()) {
             const selector = p.parseSelector();
             if (selector) |s| {
                 selector_list.children.append(s) catch unreachable;
 
                 // handle ',' here
-                const curr_tt = p.current().tok_type;
+                curr = p.current();
+                const curr_tt = curr.tok_type;
                 if (curr_tt == TT.DelimToken and p.getCurrentChar() == ',') {
                     continue;
-                } else if (p.end() or curr_tt == TT.LeftBraceToken) {
-                    // TODO: handle raw
+                } else if (p.end()) {
                     break;
-                } else {
-                    return null;
                 }
             } else {
                 return null;
@@ -707,18 +711,16 @@ pub const Parser = struct {
 
         var curr = p.current();
 
-        while ((p.end() or curr.tok_type == TT.LeftBraceToken) and
-            (curr.tok_type != TT.DelimToken and
-            p.getCurrentChar() != ','))
-        {
-            const ss = p.parseSingleSelector();
-            if (ss) |_s| {
-                selector.children.append(_s) catch unreachable;
-            } else {
-                return null;
+        while (!p.end() and curr.tok_type != TT.LeftBraceToken) {
+            if (curr.tok_type != TT.DelimToken and p.getCurrentChar() != ',') {
+                const ss = p.parseSingleSelector();
+                if (ss) |_s| {
+                    selector.children.append(_s) catch unreachable;
+                    curr = p.current();
+                } else {
+                    return null;
+                }
             }
-
-            p.advance();
         }
 
         p.addLocation(&selector.loc, _start);
@@ -726,8 +728,6 @@ pub const Parser = struct {
     }
 
     fn parseSingleSelector(p: *Parser) ?SingleSelector {
-        const single_selector = undefined;
-
         var curr = p.current();
 
         switch (curr.tok_type) {
@@ -816,7 +816,7 @@ pub const Parser = struct {
             },
         }
 
-        return single_selector;
+        return null;
     }
 
     fn parseCombinator(p: *Parser, comb: *Combinator) ?*Combinator {
@@ -898,9 +898,7 @@ pub const Parser = struct {
                 type_selector.branch2 = TypeSelectorBranch{ .ident = p.cursor };
                 curr = p.nextTok();
             },
-            else => {
-                return null;
-            },
+            else => {},
         }
 
         p.addLocation(&type_selector.loc, _start);
@@ -994,6 +992,8 @@ pub const Parser = struct {
         return attr;
     }
 
+    /// Parses PseudoClasses.
+    /// TODO: Finish the Nth Child parser
     fn parsePseudoClassSelector(p: *Parser) ?PseudoClassSelector {
         var pseudo_class = PseudoClassSelector.init();
         const _start = p.start;
@@ -1092,6 +1092,7 @@ pub const Parser = struct {
                 p.eat(TT.RightBraceToken);
             }
         }
+
         p.addLocation(&block.loc, _start);
         return block;
     }
@@ -1110,14 +1111,16 @@ pub const Parser = struct {
 
         const value = p.parseDeclValue(property.is_custom_property);
 
-        declaration.value = value;
-        declaration.important = value.important;
+        if (value) |_val| {
+            declaration.value = _val;
+        }
+        declaration.important = value.?.important;
 
         p.addLocation(&declaration.loc, _start);
         return declaration;
     }
 
-    fn parseDeclValue(p: *Parser, is_custom_property: bool) DeclValue {
+    fn parseDeclValue(p: *Parser, is_custom_property: bool) ?DeclValue {
         var value = DeclValue.init(p._a);
         const _start = p.start;
 
@@ -1128,8 +1131,14 @@ pub const Parser = struct {
         const to_parse_value: bool = if (is_custom_property) p.options.parse_custom_property else p.options.parse_value;
 
         if (to_parse_value) {
-            const seq = p.readSequence();
-            value.children = seq;
+            const seq = p.readSequence(&[_]TT{TT.SemicolonToken}, null);
+            if (seq) |_seq| {
+                value.children = _seq;
+            } else {
+                p.cursor = _start;
+                const raw = p.parseRaw(&[_]TT{ TT.SemicolonToken, TT.EOF, TT.DelimToken }, '!');
+                value.children.append(CSSNode{ .raw = raw }) catch unreachable;
+            }
         } else {
             // const raw = p.parseRaw([_]TT{ TT.SemicolonToken, TT.DelimToken }, '!');
         }
@@ -1147,7 +1156,7 @@ pub const Parser = struct {
             }
         }
 
-        if (p.end() == false) {
+        if (!p.end()) {
             // TODO: Handle Error
             p.eat(TT.SemicolonToken);
         }
@@ -1156,11 +1165,12 @@ pub const Parser = struct {
         return value;
     }
 
-    fn readSequence(p: *Parser) ArrayList(CSSNode) {
+    fn readSequence(p: *Parser, until: []const TT, delim_char: ?u8) ?ArrayList(CSSNode) {
         var arr = ArrayList(CSSNode).init(p._a);
 
         var tok = p.current();
-        scan: while (!p.end()) {
+
+        while (!p.end() and !p.consumeUntilUtil(until, tok.tok_type, delim_char)) {
             switch (tok.tok_type) {
                 TT.CommentToken, TT.WhitespaceToken => {
                     if (tok.tok_type == TT.CommentToken) {
@@ -1175,20 +1185,30 @@ pub const Parser = struct {
                     const function_node = p.parseFunction();
                     if (function_node) |f_n| {
                         arr.append(CSSNode{ .function_node = f_n }) catch unreachable;
+                        tok = p.nextTok();
+                    } else {
+                        p.addError(ParserErrorType.FunctionNodeUnclosedBracket);
+                        return null;
                     }
                 },
                 TT.IdentToken => {
                     const identifier_node = p.cursor;
                     arr.append(CSSNode{ .identifier = identifier_node }) catch unreachable;
+                    tok = p.nextTok();
                 },
                 TT.LeftParenthesisToken => {
-                    const seq = p.readSequence();
-                    var value: Value = Value.init(p._a);
-                    value.children = seq;
-                    arr.append(CSSNode{ .parentheses = value }) catch unreachable;
+                    const seq = p.readSequence(&[_]TT{}, null);
+                    if (seq) |_seq| {
+                        var value: Value = Value.init(p._a);
+                        value.children = _seq;
+                        arr.append(CSSNode{ .parentheses = value }) catch unreachable;
+                        tok = p.nextTok();
+                    } else {
+                        return null;
+                    }
                 },
                 else => {
-                    break :scan;
+                    return null;
                 },
             }
         }
@@ -1206,7 +1226,7 @@ pub const Parser = struct {
         // advance to the next token after `(`
         p.advance();
 
-        parentheses.children = p.readSequence();
+        parentheses.children = p.readSequence(&[_]TT{ TT.RightParenthesisToken, TT.EOF }, null);
 
         // ')'
         parentheses.children.append(CSSNode{ .misc_token = p.cursor }) catch unreachable;
@@ -1236,9 +1256,14 @@ pub const Parser = struct {
             }
         }
 
-        var seq = p.readSequence();
+        var seq = p.readSequence(&[_]TT{ TT.RightParenthesisToken, TT.EOF }, null);
 
-        func.children.appendSlice(seq.toOwnedSlice()) catch unreachable;
+        if (seq) |_seq| {
+            var __s = _seq;
+            func.children.appendSlice(__s.toOwnedSlice()) catch unreachable;
+        } else {
+            return null;
+        }
 
         if (!p.end()) p.eat(TT.RightParenthesisToken);
 

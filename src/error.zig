@@ -14,6 +14,9 @@ pub const ParserErrorType = union(enum) {
     /// Valid ones: 
     AttributeSelectorIsExpected,
 
+    /// FunctionNode Unclosed Bracket
+    FunctionNodeUnclosedBracket,
+
     ExpectedTokenFoundThis: struct {
         expected_token_type: TokenType,
         found_token_pos: usize,

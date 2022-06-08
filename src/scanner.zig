@@ -1118,7 +1118,7 @@ test "Scanner" {
         },
         .{
             .css = ":root *> #quince",
-            .ttypes = &[_]TT{ .ColonToken, .IdentToken, .WhitespaceToken, .DelimToken, .DelimToken, .WhitespaceToken, .HashToken, .EOF },
+            .ttypes = &[_]TT{ .ColonToken, .IdentToken, .WhitespaceToken, .StarToken, .DelimToken, .WhitespaceToken, .HashToken, .EOF },
             .lexemes = &.{ ":", "root", " ", "*", ">", " ", "#quince", "" },
         },
         .{
