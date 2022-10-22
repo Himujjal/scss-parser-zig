@@ -15,8 +15,21 @@ pub const ParserErrorType = parser.ParserErrorType;
 
 pub fn parseText(allocator: Allocator, text: []const u8, options: ParserOptions) Parser {
     var _parser = Parser.init(allocator, options);
-    var p = Parser.parse(&_parser, text);
-    return p.*;
+    _ = _parser.parse(text, false);
+    return _parser;
+}
+
+export fn render(text: [*]const u8, len: usize) [*]const u8 {
+    var a = std.heap.page_allocator;
+    var t: []const u8 = text[0..len];
+    var p = parseText(a, t, ParserOptions{});
+    var r = renderer.Renderer.init(a);
+    var res = r.renderCSS(t, p.tree, p.tokens);
+    var output = a.alloc(u8, res.len) catch unreachable;
+    std.mem.copy(u8, output, res);
+    p.deinit();
+    r.deinit();
+    return output.ptr;
 }
 
 test "Parser" {

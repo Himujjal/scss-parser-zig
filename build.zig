@@ -9,6 +9,11 @@ pub fn build(b: *std.build.Builder) void {
     lib.setBuildMode(mode);
     lib.install();
 
+    const lib2 = b.addSharedLibrary("css-parser-zig", "src/main.zig", .unversioned);
+    lib2.setBuildMode(mode);
+    lib2.setTarget(.{ .cpu_arch = .wasm32, .os_tag = .wasi });
+    lib2.install();
+
     const main_tests = b.addTest("src/main.zig");
     main_tests.setBuildMode(mode);
 

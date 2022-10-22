@@ -1,7 +1,6 @@
-/// List of all the Nodes that are to be present in the CSS Tree
 /// Copied from https://github.com/DefinitelyTyped/DefinitelyTyped/blob/master/types/css-tree/index.d.ts
 const std = @import("std");
-const token = @import("./token.zig");
+const token = @import("token.zig");
 
 const ArrayList = std.ArrayList;
 const Allocator = std.mem.Allocator;
@@ -27,12 +26,12 @@ pub const CSSLocation = struct {
 const default_location: CSSLocation = CSSLocation{};
 
 pub const Tree = union(enum) {
-    Inline: ArrayList(Declaration),
+    Inline: Inline,
     StyleSheet: StyleSheet,
 
     pub fn init(a: Allocator, is_inline: bool) Tree {
         if (is_inline) {
-            return Tree{ .Inline = ArrayList(Declaration).init(a) };
+            return Tree{ .Inline = Inline.init(a) };
         } else {
             return Tree{ .StyleSheet = StyleSheet.init(a) };
         }
@@ -44,6 +43,8 @@ pub const Tree = union(enum) {
         }
     }
 };
+
+pub const Inline = DeclarationList;
 
 pub const StyleSheet = struct {
     loc: CSSLocation = default_location,
@@ -171,7 +172,13 @@ pub const Declaration = struct {
     loc: CSSLocation = default_location,
     important: bool = false,
     property: Property,
+    /// whitespace before colon
+    ws1: ?ArrayList(usize) = null,
+    /// whitespace after colon
+    ws2: ?ArrayList(usize) = null,
     value: Value,
+    /// whitespace before semi-colon
+    ws3: ?ArrayList(usize) = null,
     pub fn init(a: Allocator) Declaration {
         const property = Property.init(a);
         const value = Value.init(a);
@@ -514,9 +521,14 @@ pub const Rule = struct {
 
 pub const Prelude = union(enum) { raw: Raw, selector_list: SelectorList };
 
+// (<Selector> [,])*
 pub const SelectorList = struct {
     loc: CSSLocation = default_location,
+    /// whitespace before the selector 
+    ws1: ?ArrayList(usize) = null,
     children: ArrayList(Selector),
+    /// whitespace after the selector, before the comma 
+    ws2: ?ArrayList(usize) = null,
     pub fn init(a: Allocator) SelectorList {
         return SelectorList{ .children = ArrayList(Selector).init(a) };
     }
@@ -528,6 +540,7 @@ pub const SelectorList = struct {
     }
 };
 
+// SingleSelector*
 pub const Selector = struct {
     loc: CSSLocation = default_location,
     children: ArrayList(SingleSelector),
@@ -535,19 +548,13 @@ pub const Selector = struct {
         return Selector{ .children = ArrayList(SingleSelector).init(a) };
     }
     pub fn deinit(self: *Selector) void {
-        switch (self._type) {
-            .id, .class, .operator => {},
-            .pseudo_class => self._type.psuedo_class.deinit(),
-            .pseudo_element => self._type.psuedo_element.deinit(),
-            .attribute_selector => self._type.attribute_selector.deinit(),
-            .combinator_selector => self._type.combinator_selector.deinit(),
-        }
+        self.children.deinit();
     }
 };
 
 pub const SingleSelector = union(enum) {
     type_selector: TypeSelector,
-    id: [2]usize,
+    id: usize,
     class: [2]usize,
     psuedo_class: PseudoClassSelector,
     pseudo_element: PseudoElementSelector,

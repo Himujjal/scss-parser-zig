@@ -21,3 +21,12 @@ to worry about their memory management), The Nodes of the AST can be easily seri
 form of a bytecode array (`[]const u8`).
 
 To know more about the bytecode array, follow the guide: [Serializing_Deserializing_AST](./AST_SERIALIZE.md)
+
+- insurance
+- rc
+- driving licence
+
+# both
+
+- voter card
+- photo

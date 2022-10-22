@@ -1,4 +1,5 @@
 const std = @import("std");
+const Allocator = std.mem.Allocator;
 const Token = @import("./token.zig").Token;
 
 // ToLower converts all characters in the byte slice from A-Z to a-z.
@@ -76,4 +77,11 @@ pub fn toHash(s: []const u8) i32 {
         }
     }
     return 0;
+}
+
+pub fn concatStrings(_a: Allocator, a: []const u8, b: []const u8) []const u8 {
+    const result = _a.alloc(u8, a.len + b.len) catch unreachable;
+    std.mem.copy(u8, result, a);
+    std.mem.copy(u8, result[a.len..], b);
+    return result;
 }

@@ -1,10 +1,10 @@
 const std = @import("std");
-const scanner = @import("./scanner.zig");
-const token = @import("./token.zig");
-const _error = @import("./error.zig");
-const utils = @import("./utils.zig");
-const nodes = @import("./nodes.zig");
-const radix_tree = @import("./radix_tree.zig");
+const scanner = @import("scanner.zig");
+const token = @import("token.zig");
+const _error = @import("error.zig");
+const utils = @import("utils.zig");
+const nodes = @import("nodes.zig");
+const radix_tree = @import("radix_tree.zig");
 
 const RadixTree = radix_tree.StringRadixTree;
 const initAtKeywordRadixTree = radix_tree.initAtKeywordRadixTree;
@@ -103,7 +103,6 @@ pub const Parser = struct {
     parser_arena: *ArenaAllocator,
     _a: Allocator,
 
-    buf: *ArrayList(Token),
     prev_end: bool = false,
     keep_ws: bool = false,
     prev_ws: bool = false,
@@ -126,10 +125,9 @@ pub const Parser = struct {
 
         const _a = parser_arena.allocator();
 
-        var tokens = initArrayList(Token, _a);
-        var errors = initArrayList(Error, _a);
-        var warnings = initArrayList(Error, _a);
-        var buf = initArrayList(Token, _a);
+        var tokens = initArrayList(Token, allocator);
+        var errors = initArrayList(Error, allocator);
+        var warnings = initArrayList(Error, allocator);
 
         const scanner_instance = Scanner.init(
             _a,
@@ -146,7 +144,6 @@ pub const Parser = struct {
             .warnings = warnings,
             .options = options,
             .tokens = tokens,
-            .buf = buf,
             .radix_tree = initAtKeywordRadixTree(),
 
             .parser_arena = parser_arena,
@@ -156,8 +153,6 @@ pub const Parser = struct {
 
     pub fn parse(p: *Parser, code: []const u8, is_inline: bool) *Self {
         _ = p.scanner_instance.scan(code);
-
-        p.scanner_instance.printTokens();
 
         p.code = code;
         p.options.is_inline = is_inline;
@@ -170,10 +165,9 @@ pub const Parser = struct {
     }
 
     pub fn deinitInternal(p: *Parser) void {
-        p._a.destroy(p.errors);
-        p._a.destroy(p.warnings);
-        p._a.destroy(p.tokens);
-        p._a.destroy(p.buf);
+        p.allocator.destroy(p.errors);
+        p.allocator.destroy(p.warnings);
+        p.allocator.destroy(p.tokens);
 
         p.parser_arena.deinit();
         p.allocator.destroy(p.parser_arena);
@@ -183,7 +177,7 @@ pub const Parser = struct {
         p.tokens.deinit();
         p.errors.deinit();
         p.warnings.deinit();
-        p.buf.deinit();
+
         p.scanner_instance.deinit();
         p.deinitInternal();
     }
@@ -261,6 +255,10 @@ pub const Parser = struct {
         const _start = tok.start;
         const _end = tok.end;
         return p.code[_start.._end];
+    }
+
+    fn getTokenStrFromIndex(p: *Parser, index: usize) []const u8 {
+        return p.getTokenString(p.tokens.items[index]);
     }
 
     fn getCurrTokStr(p: *Parser) []const u8 {
@@ -397,6 +395,8 @@ pub const Parser = struct {
 
         const prelude = p.parsePrelude();
         if (prelude == null) return null;
+
+		std.debug.print("{s}\n", .{prelude.?.selector_list.loc});
 
         if (p.end()) {
             p.cursor = _start;
@@ -691,7 +691,8 @@ pub const Parser = struct {
                 // handle ',' here
                 curr = p.current();
                 const curr_tt = curr.tok_type;
-                if (curr_tt == TT.DelimToken and p.getCurrentChar() == ',') {
+                if (curr_tt == TT.CommaToken) {
+                    p.advance();
                     continue;
                 } else if (p.end()) {
                     break;
@@ -712,14 +713,15 @@ pub const Parser = struct {
         var curr = p.current();
 
         while (!p.end() and curr.tok_type != TT.LeftBraceToken) {
-            if (curr.tok_type != TT.DelimToken and p.getCurrentChar() != ',') {
-                const ss = p.parseSingleSelector();
-                if (ss) |_s| {
-                    selector.children.append(_s) catch unreachable;
-                    curr = p.current();
-                } else {
-                    return null;
-                }
+            if (curr.tok_type == TT.CommaToken) {
+                break;
+            }
+            const ss = p.parseSingleSelector();
+            if (ss) |_s| {
+                selector.children.append(_s) catch unreachable;
+                curr = p.current();
+            } else {
+                return null;
             }
         }
 
@@ -748,7 +750,13 @@ pub const Parser = struct {
                     return null;
                 } else if (ch == '.') {
                     const next_token = p.nextTok();
-                    if (next_token.tok_type == TT.IdentToken) {}
+                    if (next_token.tok_type == TT.IdentToken) {
+                        p.advance();
+                        return SingleSelector{ .class = [_]usize{ p.cursor - 2, p.cursor - 1 } };
+                    } else {
+                        p.addError(ParserErrorType{ .ExpectedTokenFoundThis = .{ .expected_token_type = TT.IdentToken, .found_token_pos = p.cursor } });
+                        return null;
+                    }
                 } else {
                     var comb = Combinator{};
                     const _start = p.start;
@@ -761,16 +769,8 @@ pub const Parser = struct {
                 }
             },
             TT.HashToken => {
-                // Id Selector
-                curr = p.nextTok();
-                if (curr.tok_type == TT.IdentToken) {
-                    p.advance();
-                    p.start = p.cursor;
-                    return SingleSelector{ .id = [2]usize{ p.cursor - 2, p.cursor - 1 } };
-                } else {
-                    p.addError(ParserErrorType{ .ExpectedTokenFoundThis = .{ .expected_token_type = TT.IdentToken, .found_token_pos = p.cursor } });
-                    return null;
-                }
+                p.advance();
+                return SingleSelector{ .id = p.cursor - 1 };
             },
             TT.LeftBracketToken => {
                 curr = p.nextTok();
@@ -917,21 +917,27 @@ pub const Parser = struct {
         curr = p.current();
 
         // TODO: parse attribute name
+        if (curr.tok_type == TT.IdentToken) {
+            attr.name_index = p.cursor;
+            p.advance();
+        } else {
+            return null;
+        }
 
         const ws2 = p.consumeWhiteSpaceComment();
         if (ws2.items.len != 0) attr.ws2 = ws2;
 
         curr = p.current();
 
-        if (p.current().tok_type == TT.RightBracketToken) {
+        if (curr.tok_type == TT.RightBracketToken) {
             attr.matcher = null;
             attr.value = null;
             return attr;
         }
 
-        if (p.current().tok_type != TT.IdentToken) {
+        if (curr.tok_type != TT.IdentToken) {
             // parse matcher
-            switch (p.current().tok_type) {
+            switch (curr.tok_type) {
                 TT.EqualToken,
                 TT.IncludeMatchToken,
                 TT.DashMatchToken,
@@ -958,7 +964,10 @@ pub const Parser = struct {
                 attr.value = .{ .identifier = p.cursor };
             } else if (curr.tok_type == TT.StringToken) {
                 attr.value = .{ .string_node = p.cursor };
+            } else {
+                return null;
             }
+            p.advance();
 
             const ws4 = p.consumeWhiteSpaceComment();
             if (ws4.items.len != 0) attr.ws4 = ws4;
@@ -972,10 +981,15 @@ pub const Parser = struct {
                 const ws5 = p.consumeWhiteSpaceComment();
                 if (ws5.items.len != 0) attr.ws5 = ws5;
                 curr = p.current();
+            } else {
+                return null;
             }
+        } else {
+            return null;
         }
 
-        if (p.nextTok().tok_type != TT.RightBraceToken) {
+        curr = p.current();
+        if (curr.tok_type != TT.RightBracketToken) {
             p.addError(
                 ParserErrorType{
                     .ExpectedTokenFoundThis = .{
@@ -1040,7 +1054,7 @@ pub const Parser = struct {
         p.eat(TT.LeftBraceToken);
 
         if (is_declaration) {
-            // consume declaration
+            // -- Consume Declaration
             while (!p.end()) {
                 switch (p.current().tok_type) {
                     TT.RightBraceToken => break,
@@ -1105,16 +1119,28 @@ pub const Parser = struct {
         var declaration = Declaration.init(p._a);
         const _start = p.start;
 
-        var property: DeclProperty = p.parseDeclProperty();
+        var property: ?DeclProperty = p.parseDeclProperty();
+        if (property) |_p| declaration.property = _p else return null;
+
+        const ws1 = p.consumeWhiteSpaceComment();
+        if (ws1.items.len != 0) declaration.ws1 = ws1;
 
         p.eat(TT.ColonToken);
 
-        const value = p.parseDeclValue(property.is_custom_property);
+        const ws2 = p.consumeWhiteSpaceComment();
+        if (ws2.items.len != 0) declaration.ws2 = ws2;
+
+        const value = p.parseDeclValue(property.?.is_custom_property);
 
         if (value) |_val| {
             declaration.value = _val;
-        }
-        declaration.important = value.?.important;
+            declaration.important = _val.important;
+        } else return null;
+
+        const ws3 = p.consumeWhiteSpaceComment();
+        if (ws3.items.len != 0) declaration.ws3 = ws3;
+
+        p.eat(TT.SemicolonToken);
 
         p.addLocation(&declaration.loc, _start);
         return declaration;
@@ -1128,7 +1154,7 @@ pub const Parser = struct {
             // const arr = p.consumeWhiteSpaceComment();
         }
 
-        const to_parse_value: bool = if (is_custom_property) p.options.parse_custom_property else p.options.parse_value;
+        const to_parse_value = if (is_custom_property) p.options.parse_custom_property else p.options.parse_value;
 
         if (to_parse_value) {
             const seq = p.readSequence(&[_]TT{TT.SemicolonToken}, null);
@@ -1156,11 +1182,6 @@ pub const Parser = struct {
             }
         }
 
-        if (!p.end()) {
-            // TODO: Handle Error
-            p.eat(TT.SemicolonToken);
-        }
-
         p.addLocation(&value.loc, _start);
         return value;
     }
@@ -1173,19 +1194,20 @@ pub const Parser = struct {
         while (!p.end() and !p.consumeUntilUtil(until, tok.tok_type, delim_char)) {
             switch (tok.tok_type) {
                 TT.CommentToken, TT.WhitespaceToken => {
-                    if (tok.tok_type == TT.CommentToken) {
-                        arr.append(CSSNode{ .comment = p.cursor }) catch unreachable;
-                    } else {
-                        arr.append(CSSNode{ .whitespace = p.cursor }) catch unreachable;
+                    if (!p.options.skip_ws_comments) {
+                        if (tok.tok_type == TT.CommentToken) {
+                            arr.append(CSSNode{ .comment = p.cursor }) catch unreachable;
+                        } else {
+                            arr.append(CSSNode{ .whitespace = p.cursor }) catch unreachable;
+                        }
+                        tok = p.nextTok();
                     }
-                    tok = p.nextTok();
-                    continue;
                 },
                 TT.FunctionToken => {
                     const function_node = p.parseFunction();
                     if (function_node) |f_n| {
                         arr.append(CSSNode{ .function_node = f_n }) catch unreachable;
-                        tok = p.nextTok();
+                        tok = p.current();
                     } else {
                         p.addError(ParserErrorType.FunctionNodeUnclosedBracket);
                         return null;
@@ -1194,6 +1216,16 @@ pub const Parser = struct {
                 TT.IdentToken => {
                     const identifier_node = p.cursor;
                     arr.append(CSSNode{ .identifier = identifier_node }) catch unreachable;
+                    tok = p.nextTok();
+                },
+                TT.NumberToken => {
+                    const number_node = p.cursor;
+                    arr.append(CSSNode{ .misc_token = number_node }) catch unreachable;
+                    tok = p.nextTok();
+                },
+                TT.CommaToken => {
+                    const comma_node = p.cursor;
+                    arr.append(CSSNode{ .misc_token = comma_node }) catch unreachable;
                     tok = p.nextTok();
                 },
                 TT.LeftParenthesisToken => {
@@ -1206,6 +1238,11 @@ pub const Parser = struct {
                     } else {
                         return null;
                     }
+                },
+                TT.DimensionToken => {
+                    const dim_node = p.cursor;
+                    arr.append(CSSNode{ .misc_token = dim_node }) catch unreachable;
+                    tok = p.nextTok();
                 },
                 else => {
                     return null;
@@ -1350,7 +1387,7 @@ pub const Parser = struct {
         return arr;
     }
 
-    fn parseDeclProperty(p: *Parser) DeclProperty {
+    fn parseDeclProperty(p: *Parser) ?DeclProperty {
         var property = DeclProperty.init(p._a);
         const _start = p.start;
 
@@ -1392,8 +1429,11 @@ pub const Parser = struct {
 
         if (tok.tok_type == TT.HashToken) {
             p.eat(TT.HashToken);
+        } else if (tok.tok_type == TT.IdentToken) {
+            property.children.append(p.cursor) catch unreachable;
+            p.advance();
         } else {
-            p.eat(TT.IdentToken);
+            return null;
         }
 
         p.addLocation(&property.loc, _start);
