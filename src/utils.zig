@@ -1,6 +1,9 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
-const Token = @import("./token.zig").Token;
+const Token = @import("token.zig").Token;
+
+const LOC = @import("nodes.zig").CSSLocation;
+
 
 // ToLower converts all characters in the byte slice from A-Z to a-z.
 pub fn toLower(allocator: std.mem.Allocator, src: []const u8) []const u8 {

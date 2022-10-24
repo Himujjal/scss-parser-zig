@@ -16,6 +16,8 @@ const Declaration = nodes.Declaration;
 const DeclarationList = nodes.DeclarationList;
 const CSSNode = nodes.CSSNode;
 const Rule = nodes.Rule;
+const Atrule = nodes.Atrule;
+const AtrulePrelude = nodes.AtrulePrelude;
 const Prelude = nodes.Prelude;
 const SelectorList = nodes.SelectorList;
 const Selector = nodes.Selector;
@@ -32,6 +34,7 @@ const Raw = nodes.Raw;
 const Block = nodes.Block;
 const StyleSheet = nodes.StyleSheet;
 const Location = nodes.CSSLocation;
+const URL = nodes.URL;
 
 const concatStrings = utils.concatStrings;
 
@@ -74,8 +77,12 @@ pub const Renderer = struct {
     }
 
     fn renderStyleSheet(r: *Renderer, s: StyleSheet) []const u8 {
+        return r.renderSequenceCSSNode(s.children);
+    }
+
+    fn renderSequenceCSSNode(r: *Renderer, seq: ArrayList(CSSNode)) []const u8 {
         var res: []const u8 = "";
-        for (s.children.items) |css_node| {
+        for (seq.items) |css_node| {
             const cn_str = r.renderCSSNode(css_node);
             res = r.concat(res, cn_str);
         }
@@ -86,14 +93,14 @@ pub const Renderer = struct {
         // TODO: Populate Node
         return switch (css_node) {
             .an_plus_b => "",
-            .at_rule => "",
+            .at_rule => |ar| r.renderAtRule(ar),
             .at_rule_prelude => "",
             .attribute_selector => "",
             .block => "",
             .brackets => "",
             .class_selector => "",
             .combinator => "",
-            .declaration => |d| r.renderDeclaration(d) ,
+            .declaration => |d| r.renderDeclaration(d),
             .declaration_list => |dl| r.renderDeclarationList(dl),
             .dimension => "",
             .function_node => |f| r.renderFunctionNode(f),
@@ -121,7 +128,7 @@ pub const Renderer = struct {
             .at_keyword_token => "",
             .type_selector => "",
             .unicode_range => "",
-            .url => "",
+            .url => |u| r.renderUrl(u),
             .value => "",
             .misc_token => |m| r.renderToken(m),
             .comment => |w| r.renderToken(w),
@@ -134,6 +141,28 @@ pub const Renderer = struct {
 
     inline fn concat(r: *Renderer, a: []const u8, b: []const u8) []const u8 {
         return concatStrings(r._a, a, b);
+    }
+
+    fn renderAtRule(r: *Renderer, rule: Atrule) []const u8 {
+        var res: []const u8 = "";
+        res = r.concat(res, r.renderToken(rule.rule_index));
+
+        res = r.concatWS(res, rule.ws1);
+
+        if (rule.prelude) |prelude| {
+            res = r.concat(res, switch (prelude) {
+                .at_rule_prelude => |at_rule_prelude| r.renderAtRulePrelude(at_rule_prelude),
+                .raw => |raw| r.renderRaw(raw),
+            });
+        }
+
+        res = r.concatWS(res, rule.ws2);
+        res = r.concat(res, if (rule.block) |block| r.renderBlock(block) else ";");
+        return res;
+    }
+
+    fn renderAtRulePrelude(r: *Renderer, at_rule_prelude: AtrulePrelude) []const u8 {
+        return r.renderSequenceCSSNode(at_rule_prelude.children);
     }
 
     fn renderRule(r: *Renderer, rule: Rule) []const u8 {
@@ -209,7 +238,11 @@ pub const Renderer = struct {
     }
 
     fn renderPseudoElementSelector(r: *Renderer, pes: PseudoElementSelector) []const u8 {
-        return r.concat(":", r.renderPsuedoClassSelector(pes.class_selector)); 
+        return r.concat(":", r.renderPsuedoClassSelector(pes.class_selector));
+    }
+
+    fn renderUrl(r: *Renderer, url: URL) []const u8 {
+        return r.renderToken(url.url);
     }
 
     fn renderCombinatorSelector(r: *Renderer, cs: Combinator) []const u8 {
@@ -229,7 +262,7 @@ pub const Renderer = struct {
         if (as.matcher) |matcher| res = r.concat(res, r.renderToken(matcher));
         if (as.ws3) |ws3| res = r.concat(res, r.renderArrayOfTokens(ws3));
         if (as.value) |value| {
-            res = r.concat(res, switch(value) {
+            res = r.concat(res, switch (value) {
                 .string_node => |string_node| r.renderToken(string_node),
                 .identifier => |identifier| r.renderToken(identifier),
             });
@@ -268,7 +301,6 @@ pub const Renderer = struct {
         return res;
     }
 
-
     fn renderRaw(r: *Renderer, raw: Raw) []const u8 {
         var res: []const u8 = "";
         for (raw.children.items) |child| {
@@ -300,6 +332,12 @@ pub const Renderer = struct {
     fn renderToken(r: *Renderer, token_index: usize) []const u8 {
         const tok: Token = r.tokens.items[token_index];
         return r.code[tok.start..tok.end];
+    }
+
+    fn concatWS(r: *Renderer, res: []const u8, ws: ?ArrayList(usize)) []const u8 {
+        var new_res = res;
+        if (ws) |_ws| new_res = r.concat(res, r.renderArrayOfTokens(_ws));
+        return new_res;
     }
 
     pub fn deinit(r: *Renderer) void {

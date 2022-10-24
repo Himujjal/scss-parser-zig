@@ -81,7 +81,7 @@ pub const CSSNode = union(enum) {
     nth: Nth,
     number_node: Number,
     operator: Operator,
-    parentheses: Value,
+    parentheses: DeclValue,
     percentage: Percentage,
 
     selector_list: SelectorList,
@@ -103,7 +103,7 @@ pub const CSSNode = union(enum) {
 
     unicode_range: UnicodeRange,
     url: URL,
-    value: Value,
+    value: DeclValue,
 
     misc_token: usize,
 
@@ -145,7 +145,6 @@ pub const CSSNode = union(enum) {
 pub const AtrulePrelude = struct {
     loc: CSSLocation = default_location,
     children: ArrayList(CSSNode),
-    rule_type: AtKeywordTypes = AtKeywordTypes.Custom,
 
     pub fn init(a: Allocator) AtrulePrelude {
         return AtrulePrelude{ .children = ArrayList(CSSNode).init(a) };
@@ -167,21 +166,24 @@ pub const DeclarationList = struct {
     }
 };
 
-/// <ident-token> : <declaration-value>? [ '!' important ]? 
+/// <ident-token> : <declaration-value>? [ '!' important ]?
 pub const Declaration = struct {
     loc: CSSLocation = default_location,
     important: bool = false,
     property: Property,
+    ws0: ?ArrayList(usize) = null,
     /// whitespace before colon
     ws1: ?ArrayList(usize) = null,
     /// whitespace after colon
     ws2: ?ArrayList(usize) = null,
-    value: Value,
+
+    value: DeclValue,
+
     /// whitespace before semi-colon
     ws3: ?ArrayList(usize) = null,
     pub fn init(a: Allocator) Declaration {
         const property = Property.init(a);
-        const value = Value.init(a);
+        const value = DeclValue.init(a);
         return Declaration{ .property = property, .value = value };
     }
     pub fn deinit(self: *Declaration) void {
@@ -198,7 +200,9 @@ pub const CSSVariable = struct {
 pub const Property = struct {
     loc: CSSLocation = default_location,
     is_custom_property: bool = false,
-    children: ArrayList(usize),
+
+    children: ArrayList(usize), // locations of tokens in the tokenlist that compose all the property values
+
     pub fn init(a: Allocator) Property {
         return Property{ .children = ArrayList(usize).init(a) };
     }
@@ -222,27 +226,28 @@ pub const AtRulePlain = struct {
 pub const Atrule = struct {
     loc: CSSLocation = default_location,
 
+    /// AtRule Type
     rule_type: AtKeywordTypes,
-
     /// Token index where the name of the AtRule lies
-    name_index: usize = 0,
+    rule_index: usize = 0,
+    /// WhiteSpaces after the rule_type
+    ws1: ?ArrayList(WS) = null,
 
     /// Prelude is the Prelude of the At Rule between name and body
-    prelude: union(enum) {
+    prelude: ?union(enum) {
         /// List of the CSS Nodes that fit in the AtRulePrelude
         at_rule_prelude: AtrulePrelude,
-        /// Array of raw tokens 
+        /// Array of raw tokens
         raw: Raw,
-    },
+    } = null,
 
-    block: Block,
+    /// Whitespaces after prelude and before block
+    ws2: ?ArrayList(WS) = null,
 
-    pub fn init(a: Allocator) Atrule {
-        return Atrule{
-            .rule_type = AtKeywordTypes.Custom,
-            .prelude = .{ .raw = undefined },
-            .block = Block.init(a),
-        };
+    block: ?Block = null,
+
+    pub fn init() Atrule {
+        return Atrule{ .rule_type = AtKeywordTypes.Custom };
     }
 
     pub fn deinit(self: *Atrule) void {
@@ -251,7 +256,7 @@ pub const Atrule = struct {
     }
 };
 
-/// 1px, 1rem 
+/// 1px, 1rem
 pub const Dimension = struct {
     loc: CSSLocation = default_location,
     value: usize, // location of the value
@@ -310,7 +315,7 @@ pub const MediaQueryList = struct {
 /// <mf-name> = <ident>
 /// <mf-value> = <number> | <dimension> | <ident> | <ratio>
 /// <ratio> = <integer> / <integer>
-/// https://csstree.github.io/docs/syntax/#Type:media-feature 
+/// https://csstree.github.io/docs/syntax/#Type:media-feature
 pub const MediaFeature = struct {
     loc: CSSLocation = default_location,
     name: Identifier,
@@ -388,7 +393,7 @@ const MediaAnd = struct {
     }
 };
 
-/// <media-in-parens> [ or <media-in-parens> ]+ 
+/// <media-in-parens> [ or <media-in-parens> ]+
 const MediaOr = struct {
     loc: CSSLocation,
     children: ArrayList(MediaInParens),
@@ -524,10 +529,10 @@ pub const Prelude = union(enum) { raw: Raw, selector_list: SelectorList };
 // (<Selector> [,])*
 pub const SelectorList = struct {
     loc: CSSLocation = default_location,
-    /// whitespace before the selector 
+    /// whitespace before the selector
     ws1: ?ArrayList(usize) = null,
     children: ArrayList(Selector),
-    /// whitespace after the selector, before the comma 
+    /// whitespace after the selector, before the comma
     ws2: ?ArrayList(usize) = null,
     pub fn init(a: Allocator) SelectorList {
         return SelectorList{ .children = ArrayList(Selector).init(a) };
@@ -657,59 +662,54 @@ pub const UnicodeRange = struct {
 
 pub const URL = struct {
     loc: CSSLocation = default_location,
-    branches: union(enum) {
-        url_token: URLToken,
-        branch1: URLBranch1,
-    } = undefined,
+    /// index of the URL token
+    url: usize = 0,
     pub fn init() URL {
         return URL{};
-    }
-    pub fn deinit(self: *URL) void {
-        switch (self.branches) {
-            .url_token => |u| u.deinit(),
-            .branch1 => |b| b.deinit(),
-        }
     }
 };
 
 /// url( <string> <url-modifier>* )
-pub const URLBranch1 = struct {
-    loc: CSSLocation = default_location,
-    string: StringNode,
-    children: ArrayList(URLModifier),
-    pub fn init(a: Allocator) URLBranch1 {
-        return URLBranch1{ .children = ArrayList(URLModifier).init(a) };
-    }
-    pub fn deinit(self: *URLBranch1) void {
-        self.children.deinit();
-    }
-};
+// pub const URLBranch1 = struct {
+//     loc: CSSLocation = default_location,
+//     string: StringNode,
+//     children: ArrayList(URLModifier),
+//     pub fn init(a: Allocator) URLBranch1 {
+//         return URLBranch1{ .children = ArrayList(URLModifier).init(a) };
+//     }
+//     pub fn deinit(self: *URLBranch1) void {
+//         self.children.deinit();
+//     }
+// };
 
-pub const URLModifier = struct {
-    loc: CSSLocation = default_location,
-    branches: union(enum) {
-        ident: Identifier,
-        branch2: FunctionNode,
-    },
-    pub fn init() URLModifier {
-        return URLModifier{ .brances = .{ .ident = 0 } };
-    }
-    pub fn deinit(self: *URLModifier) void {
-        switch (self.brances) {
-            .branch2 => |b| b.deinit(),
-            .ident => {},
-        }
-    }
-};
+// pub const URLModifier = struct {
+//     loc: CSSLocation = default_location,
+//     branches: union(enum) {
+//         ident: Identifier,
+//         branch2: FunctionNode,
+//     },
+//     pub fn init() URLModifier {
+//         return URLModifier{ .brances = .{ .ident = 0 } };
+//     }
+//     pub fn deinit(self: *URLModifier) void {
+//         switch (self.brances) {
+//             .branch2 => |b| b.deinit(),
+//             .ident => {},
+//         }
+//     }
+// };
 
-pub const Value = struct {
+pub const DeclValue = struct {
     loc: CSSLocation = default_location,
+
     children: ArrayList(CSSNode),
+
     important: bool = false,
-    pub fn init(a: Allocator) Value {
-        return Value{ .children = ArrayList(CSSNode).init(a) };
+
+    pub fn init(a: Allocator) DeclValue {
+        return DeclValue{ .children = ArrayList(CSSNode).init(a) };
     }
-    pub fn deinit(self: *Value) void {
+    pub fn deinit(self: *DeclValue) void {
         self.children.deinit();
     }
 };

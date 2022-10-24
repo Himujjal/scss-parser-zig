@@ -2,6 +2,8 @@ const std = @import("std");
 const parser = @import("parser.zig");
 const renderer = @import("renderer.zig");
 
+const Allocator = std.Allocator;
+
 const expect = std.testing.expect;
 const _a = std.testing.allocator;
 
@@ -28,40 +30,40 @@ const test_strings = [_][]const u8{
     \\}
     ,
     \\ a{ --a: var(a); }
+    ,
 };
 
 test "Parser Tests" {
     // const MAX = test_strings.len;
-    const MAX = 14;
+    const MAX = 15;
     for (test_strings) |test_str, i| {
         if (i == MAX) {
-            std.debug.print("\nTest {d}:______{s}______\n", .{ i, test_str });
             var p = Parser.init(_a, ParserOptions{
                 .parse_rule_prelude = true,
                 .skip_ws_comments = false,
             });
-            // _ = p.parse(test_str, false);
+            _ = p.parse(test_str, false);
 
-            // var r = Renderer.init(_a);
-            // const output = r.renderCSS(test_str, p.tree, p.tokens);
+            var r = Renderer.init(_a);
+            const output = r.renderCSS(test_str, p.tree, p.tokens);
 
-            // expect(std.mem.eql(u8, test_str, output)) catch |err| {
-            //     std.debug.print("{d}. EXPECTED: __{s}__ | GOT: __{s}__\n", .{ i + 1, test_str, output });
-            //     p.deinit();
-            //     r.deinit();
-            //     return err;
-            // };
-            // expect(p.errors.items.len == 0) catch |err| {
-            //     for (p.errors.items) |_err, k| {
-            //         std.debug.print("{d}. Error: {}\n", .{ k + 1, _err._type });
-            //     }
-            //     p.deinit();
-            //     r.deinit();
-            //     return err;
-            // };
+            expect(std.mem.eql(u8, test_str, output)) catch |err| {
+                std.debug.print("{d}. EXPECTED: __{s}__ | GOT: __{s}__\n", .{ i + 1, test_str, output });
+                p.deinit();
+                r.deinit();
+                return err;
+            };
+            expect(p.errors.items.len == 0) catch |err| {
+                for (p.errors.items) |_err, k| {
+                    std.debug.print("{d}. Error: {}\n", .{ k + 1, _err._type });
+                }
+                p.deinit();
+                r.deinit();
+                return err;
+            };
 
             p.deinit();
-            // r.deinit();
+            r.deinit();
         }
     }
 }

@@ -22,11 +22,7 @@ form of a bytecode array (`[]const u8`).
 
 To know more about the bytecode array, follow the guide: [Serializing_Deserializing_AST](./AST_SERIALIZE.md)
 
-- insurance
-- rc
-- driving licence
+## TODO
 
-# both
-
-- voter card
-- photo
+- [ ] All test cases from [csstree](https://github.com/csstree/csstree)
+- [ ] Error Handling - Errors as enum and the generated error strings according to each enum

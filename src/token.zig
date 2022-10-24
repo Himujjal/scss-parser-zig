@@ -70,10 +70,10 @@ pub const AtKeywordTypes = enum {
     const KV = struct { val: []const u8, key_type: AtKeywordTypes };
     const ATKT = AtKeywordTypes;
 
-    pub fn getAtKeyWordTypeFromTok(_a: Allocator, tok: Token, code: []const u8, radix_tree: RadixTree(ATKT)) AtKeywordTypes {
-        const token_string: []const u8 = code[(tok.start + 1)..(tok.end)];
-        const token_string_lower = utils.toLower(_a, token_string);
-        return radix_tree.get(token_string_lower) orelse AtKeywordTypes.Custom;
+    pub fn getAtKeyWordTypeFromTok(_a: Allocator, token_string: []const u8, radix_tree: RadixTree(ATKT)) AtKeywordTypes {
+        var token_string_lower = utils.toLower(_a, token_string);
+		var r = radix_tree;
+        return r.get(token_string_lower) orelse AtKeywordTypes.Custom;
     }
 };
 

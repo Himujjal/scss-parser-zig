@@ -1,9 +1,9 @@
 const std = @import("std");
 const expect = std.testing.expect;
 
-const token = @import("./token.zig");
-const parser = @import("./parser.zig");
-const _error = @import("./error.zig");
+const token = @import("token.zig");
+const parser = @import("parser.zig");
+const _error = @import("error.zig");
 const ArenaAllocator = std.heap.ArenaAllocator;
 const Allocator = std.mem.Allocator;
 const ArrayList = std.ArrayList;
