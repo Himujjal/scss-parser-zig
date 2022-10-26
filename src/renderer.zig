@@ -36,6 +36,26 @@ const StyleSheet = nodes.StyleSheet;
 const Location = nodes.CSSLocation;
 const URL = nodes.URL;
 
+const MediaQueryList = nodes.MediaQueryList;
+const MediaQuery = nodes.MediaQuery;
+const MediaFeature = nodes.MediaFeature;
+
+const MediaAndOr = nodes.MediaAndOr;
+const MediaCondition = nodes.MediaCondition;
+const MediaQueryBranch2 = nodes.MediaQueryBranch2;
+const MediaConditionWithoutOr = nodes.MediaConditionWithoutOr;
+const MediaNot = nodes.MediaNot;
+const MediaInParens = nodes.MediaInParens;
+const GeneralEnclosed = nodes.GeneralEnclosed;
+const GeneralEnclosedIndent = nodes.GeneralEnclosedIdent;
+
+const MfPlain = nodes.MfPlain;
+const MfValue = nodes.MfValue;
+const MfBoolean = nodes.MfBoolean;
+const MfRange = nodes.MfRange;
+const Ratio = nodes.Ratio;
+const MfRangeOp = nodes.MfRangeOp;
+
 const concatStrings = utils.concatStrings;
 
 /// Takes the CSS AST and outputs the results as a CSS file
@@ -108,8 +128,8 @@ pub const Renderer = struct {
             .id_selector => "",
             .identifier => |i| r.renderToken(i),
             .media_feature => "",
-            .media_query => "",
-            .media_query_list => "",
+            .media_query => |mq| r.renderMediaQuery(mq),
+            .media_query_list => |mql| r.renderMediaQueryList(mql),
             .nth => "",
             .number_node => "",
             .operator => "",
@@ -118,17 +138,17 @@ pub const Renderer = struct {
             .selector => "",
             .pseudo_class_selector => "",
             .pseudo_element_selector => "",
-            .ratio => "",
+            .ratio => |ra| r.renderRatio(ra),
             .raw => "",
             .rule => |_r| r.renderRule(_r),
             .variable => "",
-            .string_node => "",
+            .string_node => |s| r.renderString(s),
             .percentage => "",
             .style_sheet => "",
             .at_keyword_token => "",
             .type_selector => "",
             .unicode_range => "",
-            .url => |u| r.renderUrl(u),
+            .url => |u| r.renderToken(u),
             .value => "",
             .misc_token => |m| r.renderToken(m),
             .comment => |w| r.renderToken(w),
@@ -145,7 +165,7 @@ pub const Renderer = struct {
 
     fn renderAtRule(r: *Renderer, rule: Atrule) []const u8 {
         var res: []const u8 = "";
-        res = r.concat(res, r.renderToken(rule.rule_index));
+        res = r.concat(res, utils.toLower(r._a, r.renderToken(rule.rule_index)));
 
         res = r.concatWS(res, rule.ws1);
 
@@ -282,6 +302,174 @@ pub const Renderer = struct {
         return res;
     }
 
+    fn renderMediaQueryList(r: *Renderer, mql: MediaQueryList) []const u8 {
+        var res: []const u8 = "";
+        for (mql.children.items) |mq, i| {
+            res = r.concat(res, r.renderMediaQuery(mq));
+            if (i != mql.children.items.len - 1) res = r.concat(res, ",");
+        }
+        return res;
+    }
+
+    fn renderMediaQuery(r: *Renderer, mq: MediaQuery) []const u8 {
+        var res: []const u8 = "";
+        res = r.concatWS(res, mq.ws1);
+        res = r.concat(res, switch (mq.branches) {
+            .media_condition => |mc| r.renderMediaCondition(mc),
+            .media_query_branch_2 => |mqb2| r.renderMediaQueryBranch2(mqb2.*),
+        });
+        res = r.concatWS(res, mq.ws2);
+        return res;
+    }
+
+    fn renderMediaAndOr(r: *Renderer, rm: MediaAndOr) []const u8 {
+        var res: []const u8 = "";
+
+        const len = rm.and_or_list.items.len;
+        for (rm.children.items) |media_in_parens, i| {
+            if (i != 0 and i != len - 1) {
+                const ws1 = rm.ws1_list.items[i - 1];
+                res = r.concatWS(res, ws1);
+
+                const and_or_list = rm.and_or_list.items[i - 1];
+                res = r.concat(res, r.renderToken(and_or_list));
+
+                const ws2 = rm.ws2_list.items[i - 1];
+                res = r.concatWS(res, ws2);
+            }
+            res = r.concat(res, r.renderMediaInParens(media_in_parens));
+        }
+
+        return res;
+    }
+
+    fn renderMediaCondition(r: *Renderer, rm: MediaCondition) []const u8 {
+        return switch (rm) {
+            .media_not => |mn| r.renderMediaNot(mn.*),
+            .media_and => |ma| r.renderMediaAndOr(ma.*),
+            .media_or => |mo| r.renderMediaAndOr(mo.*),
+        };
+    }
+    fn renderMediaQueryBranch2(r: *Renderer, rm: MediaQueryBranch2) []const u8 {
+        var res: []const u8 = "";
+
+        if (rm.is_not) |is_not| {
+            res = r.concat(res, if (is_not) "not" else "else");
+        }
+        res = r.concatWS(res, rm.ws1);
+        res = r.concat(res, r.renderToken(rm.media_type));
+
+        if (rm.media_condition_without_or) |media_condition_without_or| {
+            res = r.concatWS(res, rm.ws2);
+            res = r.concat(res, "and");
+            res = r.concatWS(res, rm.ws3);
+            res = r.concat(res, r.renderMediaConditionWithoutOr(media_condition_without_or));
+        }
+
+        return res;
+    }
+    fn renderMediaConditionWithoutOr(r: *Renderer, rm: MediaConditionWithoutOr) []const u8 {
+		return switch(rm) {
+			.media_not => |mn| r.renderMediaNot(mn.*),
+			.media_and => |ma| r.renderMediaAndOr(ma.*),
+		};
+    }
+    fn renderMediaNot(r: *Renderer, rm: MediaNot) []const u8 {
+        var res: []const u8 = "";
+        res = r.concat(res, "not");
+        res = r.concatWS(res, rm.ws1);
+        res = r.concat(res, r.renderMediaInParens(rm.media_in_parens.*));
+        return res;
+    }
+
+    fn renderMediaInParens(r: *Renderer, rm: MediaInParens) []const u8 {
+        var res: []const u8 = "";
+        res = r.concat(res, "(");
+        res = r.concatWS(res, rm.ws1);
+
+        res = r.concat(res, switch (rm.content) {
+            .media_condition => |mc| r.renderMediaCondition(mc),
+            .media_feature => |mf| r.renderMediaFeature(mf),
+            .general_enclosed => |ge| r.renderGeneralEnclosed(ge.*),
+        });
+
+        res = r.concatWS(res, rm.ws2);
+        res = r.concat(res, ")");
+        return res;
+    }
+
+    fn renderGeneralEnclosed(r: *Renderer, ge: GeneralEnclosed) []const u8 {
+		return switch(ge) {
+			.function => |func| r.renderFunctionNode(func.*),
+			.ident => |ident| r.renderGeneralEnclosedIndent(ident.*),
+		};
+    }
+    fn renderGeneralEnclosedIndent(r: *Renderer, gei: GeneralEnclosedIndent) []const u8 {
+		_ = r;
+		_ = gei;
+		return "";
+    }
+
+    fn renderMfPlain(r: *Renderer, rm: MfPlain) []const u8 {
+        var res: []const u8 = "";
+        res = r.concat(res, r.renderToken(rm.name));
+        res = r.concatWS(res, rm.ws1);
+		res = r.concat(res, ":");
+        res = r.concatWS(res, rm.ws2);
+        res = r.concat(res, r.renderMfValue(rm.value));
+        return res;
+    }
+
+    fn renderMfValue(r: *Renderer, mfv: MfValue) []const u8 {
+        return switch (mfv) {
+            .number => |n| r.renderToken(n),
+            .dimension => |d| r.renderToken(d),
+            .ident => |i| r.renderToken(i),
+            .ratio => |ra| r.renderRatio(ra.*),
+        };
+    }
+
+    fn renderMfRange(r: *Renderer, rm: MfRange) []const u8 {
+        var res: []const u8 = "";
+
+        res = r.concat(
+            res,
+            if (rm.mf_name_first) r.renderToken(rm.mf_name) else r.renderMfValue(rm.mf_value1),
+        );
+        res = r.concatWS(res, rm.ws1);
+        if (rm.op1) |op1| res = r.concat(res, r.renderMfRangeOp(op1));
+        res = r.concatWS(res, rm.ws2);
+
+        res = r.concat(
+            res,
+            if (!rm.mf_name_first) r.renderToken(rm.mf_name) else r.renderMfValue(rm.mf_value1),
+        );
+
+        if (rm.mf_value2) |mf_value2| {
+            res = r.concatWS(res, rm.ws3);
+            res = r.concat(res, r.renderMfRangeOp(rm.op2.?));
+            res = r.concatWS(res, rm.ws4);
+            res = r.concat(res, r.renderMfValue(mf_value2));
+        }
+
+        return res;
+    }
+
+    fn renderMfRangeOp(r: *Renderer, mfro: MfRangeOp) []const u8 {
+        return switch (mfro) {
+            .GreaterThan, .LessThan, .Equal => |t| r.renderToken(t),
+            .GreaterThanEqual, .LessThanEqual => |gte| r.concat(r.renderToken(gte[0]), r.renderToken(gte[1])),
+        };
+    }
+
+    fn renderMediaFeature(r: *Renderer, mf: MediaFeature) []const u8 {
+        return switch (mf) {
+            .mf_plain => |mp| r.renderMfPlain(mp.*),
+            .mf_boolean => |mb| r.renderToken(mb),
+            .mf_range => |mr| r.renderMfRange(mr.*),
+        };
+    }
+
     fn renderDeclarationList(r: *Renderer, dl: DeclarationList) []const u8 {
         var res: []const u8 = "";
         for (dl.children.items) |decl| res = r.concat(res, r.renderDeclaration(decl));
@@ -306,6 +494,22 @@ pub const Renderer = struct {
         for (raw.children.items) |child| {
             res = r.concat(res, r.renderToken(child));
         }
+        return res;
+    }
+
+    fn renderString(r: *Renderer, string_index: usize) []const u8 {
+		const string_tok: Token = r.tokens.items[string_index];
+		const string = r.code[string_tok.start + 1..string_tok.end - 1];
+        return r.concat("\"", r.concat(string, "\""));
+    }
+
+    fn renderRatio(r: *Renderer, ra: Ratio) []const u8 {
+        var res: []const u8 = "";
+        res = r.concat(res, r.renderToken(ra.left));
+        res = r.concatWS(res, ra.ws1);
+        res = r.concat(res, r.renderToken(ra.div));
+        res = r.concatWS(res, ra.ws2);
+        res = r.concat(res, r.renderToken(ra.right));
         return res;
     }
 

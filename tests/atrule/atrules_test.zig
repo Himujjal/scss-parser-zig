@@ -7,5 +7,7 @@ const print = std.debug.print;
 const expect = std.testing.expect;
 
 test "'AtRule > Font-Face' Test" {
-    try test_utils.testFile("atrule", "font-face", false);
+    // try test_utils.testFile("atrule", "font-face", false);
+	// try test_utils.testFile("atrule", "import", false);
+	try test_utils.testFile("atrule", "media", false);
 }

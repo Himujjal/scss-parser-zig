@@ -44,9 +44,22 @@ const DeclValue = nodes.DeclValue;
 const Location = nodes.CSSLocation;
 const FunctionNode = nodes.FunctionNode;
 const Parentheses = nodes.Value;
+
 const MediaQueryList = nodes.MediaQueryList;
 const MediaQuery = nodes.MediaQuery;
 const MediaCondition = nodes.MediaCondition;
+const MediaQueryBranch2 = nodes.MediaQueryBranch2;
+const MediaConditionWithoutOr = nodes.MediaConditionWithoutOr;
+const MediaInParens = nodes.MediaInParens;
+const MediaFeature = nodes.MediaFeature;
+const MfPlain = nodes.MfPlain;
+const MfRange = nodes.MfRange;
+const MfValue = nodes.MfValue;
+const Ratio = nodes.Ratio;
+const MfRangeOp = nodes.MfRangeOp;
+const MediaNot = nodes.MediaNot;
+const MediaAndOr = nodes.MediaAndOr;
+
 const CSSVariable = nodes.CSSVariable;
 const TypeSelectorBranch = nodes.TypeSelectorBranch;
 const Combinator = nodes.Combinator;
@@ -117,7 +130,6 @@ pub const Parser = struct {
 
     pub fn init(allocator: Allocator, opt: ParserOptions) Self {
         var options = opt;
-        // TODO: Remove this after media query parser is complete
         options.parse_media_prelude = false;
 
         var parser_arena = allocator.create(ArenaAllocator) catch unreachable;
@@ -438,7 +450,8 @@ pub const Parser = struct {
 
         var tok = p.current();
 
-        at_rule.rule_type = p.radix_tree.get(p.code[tok.start + 1 .. tok.end]) orelse AtKeywordTypes.Custom;
+		const at_rule_type_str = utils.toLower(p._a, p.code[tok.start + 1 .. tok.end]);
+        at_rule.rule_type = p.radix_tree.get(at_rule_type_str) orelse AtKeywordTypes.Custom;
         at_rule.rule_index = p.cursor;
 
         tok = p.nextTok();
@@ -456,10 +469,9 @@ pub const Parser = struct {
             }
         }
 
-
         at_rule.ws2 = p.consumeWhiteSpaceComment();
 
-		tok = p.current(); 
+        tok = p.current();
 
         switch (tok.tok_type) {
             // @charset, @import, @namespace
@@ -480,7 +492,7 @@ pub const Parser = struct {
 
     fn parseAtRulePrelude(p: *Parser, rule_type: AtKeywordTypes) AtRulePrelude {
         var at_rule_prelude = AtRulePrelude.init(p._a);
-        const _start = p.cursor;
+        const _start = p.start;
 
         var tok = p.current();
 
@@ -545,16 +557,34 @@ pub const Parser = struct {
                 at_rule_prelude.children.append(CSSNode{ .raw = raw }) catch unreachable;
             },
             AtKeywordTypes.Import => {
-                var ws_comments = p.consumeWhiteSpaceCommentCSSNode();
-                at_rule_prelude.children.appendSlice(ws_comments.toOwnedSlice()) catch unreachable;
+                switch (tok.tok_type) {
+                    TT.URLToken => {
+                        at_rule_prelude.children.append(CSSNode{ .url = p.cursor }) catch unreachable;
+                        tok = p.nextTok();
+                    },
+                    TT.StringToken => {
+                        at_rule_prelude.children.append(CSSNode{ .string_node = p.cursor }) catch unreachable;
+                        tok = p.nextTok();
+                    },
+                    else => {
+                        // error
+                    },
+                }
+                var ws_css_nodep = p.consumeWhiteSpaceCommentCSSNode();
+                at_rule_prelude.children.appendSlice(ws_css_nodep.toOwnedSlice()) catch unreachable;
 
-                if (p.current().tok_type == TT.URLToken) {
-                    const url = p.parseUrl();
-                    at_rule_prelude.children.append(CSSNode{ .url = url }) catch unreachable;
-                    p.advance();
-                } else {
-                    const raw = p.parseRaw(&[_]TT{TT.SemicolonToken}, null);
-                    at_rule_prelude.children.append(CSSNode{ .raw = raw }) catch unreachable;
+                tok = p.current();
+
+                switch (tok.tok_type) {
+                    TT.IdentToken => {
+                        const media_query_list = p.parseMediaQueryList();
+                        at_rule_prelude.children.append(CSSNode{ .media_query_list = media_query_list }) catch unreachable;
+                    },
+                    else => {
+                        at_rule_prelude.children.append(CSSNode{
+                            .raw = p.parseRaw(&[_]TT{TT.SemicolonToken}, null),
+                        }) catch unreachable;
+                    },
                 }
             },
             AtKeywordTypes.Keyframes => {
@@ -618,14 +648,6 @@ pub const Parser = struct {
         return at_rule_prelude;
     }
 
-    fn parseUrl(p: *Parser) URL {
-        var url = URL.init();
-        const _start = p.start;
-        url.url = p.cursor;
-        p.addLocation(&url.loc, _start);
-        return url;
-    }
-
     fn parseCSSVariable(p: *Parser) UnMatchErr!CSSVariable {
         const _start = p.start;
         var tok = p.current();
@@ -646,25 +668,495 @@ pub const Parser = struct {
         children.append(CSSNode{ .raw = raw }) catch unreachable;
     }
 
-    fn parseMediaQuery(p: *Parser) MediaQuery {
+    fn parseMediaQueryList(p: *Parser) MediaQueryList {
+        var media_query_list = MediaQueryList.init(p._a);
+        const _start = p.start;
+
+        var curr_tt = p.current().tok_type;
+
+        while (!p.end() and (curr_tt != TT.RightBraceToken and curr_tt != TT.SemicolonToken)) : (curr_tt = p.current().tok_type) {
+            var media_query = p.parseMediaQuery();
+            if (media_query) |mq| {
+                media_query_list.children.append(mq) catch unreachable;
+            } else {
+                // TODO: error
+            }
+            if (p.current().tok_type == TT.CommaToken) p.advance();
+        }
+
+        p.addLocation(&media_query_list.loc, _start);
+        return media_query_list;
+    }
+
+    fn parseMediaQuery(p: *Parser) ?MediaQuery {
         var media_query = MediaQuery.init();
         const _start = p.start;
+
+        media_query.ws1 = p.consumeWhiteSpaceComment();
+        const checkpoint = p.cursor;
+
+        const media_condition = p.parseMediaCondition();
+
+        if (media_condition) |mc| {
+            media_query.branches.media_condition = mc;
+        } else {
+            p.cursor = checkpoint;
+            const media_query_branch_2 = p.parseMediaQueryBranch2();
+            if (media_query_branch_2) |mqb2| {
+                media_query.branches = .{ .media_query_branch_2 = mqb2 };
+            } else {
+                // to be parsed raw
+                return null;
+            }
+        }
+
+        media_query.ws2 = p.consumeWhiteSpaceComment();
 
         p.addLocation(&media_query.loc, _start);
         return media_query;
     }
 
-    fn parseMediaQueryList(p: *Parser) MediaQueryList {
-        var media_query_list = MediaQueryList.init(p._a);
-        const _start = p.start;
+    fn parseMediaNot(p: *Parser) ?*MediaNot {
+        const _start = p.cursor;
+        var media_not: *MediaNot = p.heaped(MediaNot, MediaNot{});
 
-        while (!p.end() and p.current().tok_type != TT.RightBraceToken) {
-            var media_query = p.parseMediaQuery();
-            media_query_list.children.append(media_query) catch unreachable;
+        var tok = p.current();
+        var tok_str = p.getCurrTokStr();
+
+        if (tok.tok_type == .IdentToken and std.mem.eql(u8, tok_str, "not")) {
+            media_not.not = p.cursor;
+            tok = p.nextTok();
+            media_not.ws1 = p.consumeWhiteSpaceComment();
+            media_not.media_in_parens = p.parseMediaInParens() orelse return null;
+        } else {
+            return null;
         }
 
-        p.addLocation(&media_query_list.loc, _start);
-        return media_query_list;
+        p.addLocation(&media_not.loc, _start);
+        return media_not;
+    }
+
+    // TODO: WOrk on this
+    fn parseMediaCondition(p: *Parser) ?MediaCondition {
+        const _start = p.cursor;
+        var tok = p.current();
+        var tok_str = p.getCurrTokStr();
+
+        if (tok.tok_type == .IdentToken and std.mem.eql(u8, tok_str, "not")) {
+            const media_not = p.parseMediaNot();
+            if (media_not) |mn| {
+                return MediaCondition{ .media_not = mn };
+            } else {
+                p.cursor = _start;
+                return null;
+            }
+        } else if (tok.tok_type == .LeftParenthesisToken) {
+            var media_and_or: *MediaAndOr = p.heaped(MediaAndOr, MediaAndOr.init(p._a));
+            var is_and: ?bool = null;
+
+            outer_loop: while (true) {
+                const media_parens = p.parseMediaInParens() orelse return null;
+                media_and_or.children.append(media_parens.*) catch unreachable;
+
+                var fallback_cursor = p.cursor;
+
+                const ws1 = p.consumeWhiteSpaceComment();
+                media_and_or.ws1_list.append(ws1) catch unreachable;
+
+                tok = p.current();
+                switch (tok.tok_type) {
+                    .CommaToken, .LeftBraceToken, .EOF => {
+                        p.cursor = fallback_cursor;
+                        is_and = false;
+                        break :outer_loop;
+                    },
+                    .IdentToken => {
+                        tok_str = p.getCurrTokStr();
+                        if (std.mem.eql(u8, tok_str, "and")) {
+                            if (is_and) |ia| {
+                                if (!ia) return null;
+                            }
+                            is_and = true;
+                        } else if (std.mem.eql(u8, tok_str, "or")) {
+                            if (is_and) |ia| {
+                                if (ia) return null;
+                            }
+                            is_and = false;
+                        } else {
+                            return null;
+                        }
+
+                        media_and_or.and_or_list.append(p.cursor) catch unreachable;
+
+                        const ws2 = p.consumeWhiteSpaceComment();
+                        media_and_or.ws2_list.append(ws2) catch unreachable;
+                    },
+                    else => return null,
+                }
+            }
+
+            media_and_or.is_and = is_and.?;
+            if (media_and_or.is_and) {
+                return MediaCondition{ .media_and = media_and_or };
+            } else {
+                return MediaCondition{ .media_or = media_and_or };
+            }
+        }
+
+        p.cursor = _start;
+        return null;
+    }
+
+    fn parseMediaQueryBranch2(p: *Parser) ?*MediaQueryBranch2 {
+        var media_query_branch_2: *MediaQueryBranch2 = p.heaped(MediaQueryBranch2, MediaQueryBranch2{});
+        const _start = p.cursor;
+
+        var tok = p.current();
+
+        if (tok.tok_type == .IdentToken) {
+            const curr_str = p.getCurrTokStr();
+            if (std.mem.eql(u8, curr_str, "not") or std.mem.eql(u8, curr_str, "only")) {
+                media_query_branch_2.is_not = std.mem.eql(u8, curr_str, "not");
+                media_query_branch_2.not_only_index = p.cursor;
+                tok = p.nextTok();
+                media_query_branch_2.ws1 = p.consumeWhiteSpaceComment();
+                tok = p.nextTok();
+            }
+            if (tok.tok_type == .IdentToken) {
+                media_query_branch_2.media_type = p.cursor;
+                tok = p.nextTok();
+            }
+        }
+
+        media_query_branch_2.ws2 = p.consumeWhiteSpaceComment();
+        tok = p.current();
+        var point = p.cursor;
+
+        if (tok.tok_type == .IdentToken and std.mem.eql(u8, p.getCurrTokStr(), "and")) {
+            p.advance();
+            media_query_branch_2.ws3 = p.consumeWhiteSpaceComment();
+            tok = p.current();
+
+            var media_condition_without_or = p.parseMediaConditionWithoutOr();
+            if (media_condition_without_or) |mcwo| {
+                media_query_branch_2.media_condition_without_or = mcwo;
+            } else {
+                p.cursor = point;
+                return null;
+            }
+        }
+        switch (p.current().tok_type) {
+            .CommaToken, .RightBraceToken, .SemicolonToken => {
+                p.addLocation(&media_query_branch_2.loc, _start);
+                return media_query_branch_2;
+            },
+            else => {
+                p.cursor = point;
+                return null;
+            },
+        }
+    }
+
+    fn parseMediaConditionWithoutOr(p: *Parser) ?MediaConditionWithoutOr {
+        const _start = p.cursor;
+        var tok = p.current();
+        var tok_str = p.getCurrTokStr();
+
+        if (tok.tok_type == .IdentToken and std.mem.eql(u8, tok_str, "not")) {
+            const media_not = p.parseMediaNot();
+            if (media_not) |mn| {
+                return MediaConditionWithoutOr{ .media_not = mn };
+            } else {
+                p.cursor = _start;
+                return null;
+            }
+        } else if (tok.tok_type == .LeftParenthesisToken) {
+            var media_and_or: *MediaAndOr = p.heaped(MediaAndOr, MediaAndOr.init(p._a));
+            media_and_or.is_and = true;
+
+            outer_loop: while (true) {
+                const media_parens = p.parseMediaInParens() orelse return null;
+                media_and_or.children.append(media_parens.*) catch unreachable;
+
+                var fallback_cursor = p.cursor;
+
+                const ws1 = p.consumeWhiteSpaceComment();
+                media_and_or.ws1_list.append(ws1) catch unreachable;
+
+                tok = p.current();
+
+                switch (tok.tok_type) {
+                    .CommaToken, .LeftBraceToken, .EOF, .SemicolonToken => {
+                        p.cursor = fallback_cursor;
+                        break :outer_loop;
+                    },
+                    .IdentToken => {
+                        tok_str = p.getCurrTokStr();
+                        if (!std.mem.eql(u8, tok_str, "and")) return null;
+
+                        media_and_or.and_or_list.append(p.cursor) catch unreachable;
+
+                        const ws2 = p.consumeWhiteSpaceComment();
+                        media_and_or.ws2_list.append(ws2) catch unreachable;
+                    },
+                    else => return null,
+                }
+            }
+
+            return MediaConditionWithoutOr{ .media_and = media_and_or };
+        }
+
+        return null;
+    }
+
+    fn parseMediaInParens(p: *Parser) ?*MediaInParens {
+        var media_in_parens: *MediaInParens = p._a.create(MediaInParens) catch unreachable;
+        const _start = p.start;
+        var tok = p.current();
+
+        if (tok.tok_type == TT.LeftParenthesisToken) {
+            p.advance();
+            media_in_parens.ws1 = p.consumeWhiteSpaceComment();
+            tok = p.current();
+
+            if (tok.tok_type == TT.IdentToken) {
+                if (std.mem.eql(u8, p.getCurrTokStr(), "not")) {
+                    if (p.parseMediaCondition()) |cdn| {
+                        media_in_parens.content.media_condition = cdn;
+                    } else {
+                        p.cursor = _start;
+                        return null;
+                    }
+                } else {
+                    if (p.parseMediaFeature()) |mf| {
+                        media_in_parens.content = .{ .media_feature = mf };
+                    } else {
+                        p.cursor = _start;
+                        return null;
+                    }
+                }
+            } else if (tok.tok_type == TT.LeftParenthesisToken) {
+                // media_condition
+                const condition = p.parseMediaCondition();
+                if (condition) |cdn| {
+                    media_in_parens.content.media_condition = cdn;
+                } else {
+                    p.cursor = _start;
+                    return null;
+                }
+            }
+
+            media_in_parens.ws2 = p.consumeWhiteSpaceComment();
+            tok = p.current();
+
+            if (tok.tok_type == TT.RightParenthesisToken) {
+                p.advance();
+            } else {
+                p.cursor = _start;
+                return null;
+            }
+        } else if (tok.tok_type == TT.FunctionToken) {
+            var function_node: *FunctionNode = p._a.create(FunctionNode) catch unreachable;
+            const f = p.parseFunction();
+            if (f) |_f| {
+                function_node.* = _f;
+                media_in_parens.content.general_enclosed.function = function_node;
+            } else {
+                p.cursor = _start;
+                return null;
+            }
+        } else {
+            return null;
+        }
+
+        p.addLocation(&media_in_parens.loc, _start);
+        return media_in_parens;
+    }
+
+    fn parseMediaFeature(p: *Parser) ?MediaFeature {
+        const _start = p.cursor;
+
+        var tok = p.current();
+
+        const first_name_index = p.cursor;
+        tok = p.nextTok();
+
+        const ws1 = p.consumeWhiteSpaceComment();
+        tok = p.current();
+
+        if (tok.tok_type == TT.RightParenthesisToken) {
+            p.cursor = first_name_index + 1;
+            return MediaFeature{ .mf_boolean = first_name_index };
+        } else if (tok.tok_type == TT.ColonToken) {
+            tok = p.nextTok();
+
+            var mf_plain: *MfPlain = p._a.create(MfPlain) catch unreachable;
+            mf_plain.name = first_name_index;
+            mf_plain.ws1 = ws1;
+            mf_plain.ws2 = p.consumeWhiteSpaceComment();
+
+            tok = p.current();
+
+            if (p.parseMfValue()) |val| {
+                mf_plain.value = val;
+            } else {
+                p.cursor = _start;
+                return null;
+            }
+            p.addLocation(&mf_plain.loc, _start);
+            return MediaFeature{ .mf_plain = mf_plain };
+        } else if (tok.tok_type == TT.DelimToken) {
+            const curr_char = p.getCurrentChar();
+            switch (curr_char) {
+                '<', '>', '=' => {
+                    p.cursor = first_name_index;
+                    const mf_range = p.parseMfRange();
+                    if (mf_range) |mr| {
+                        return MediaFeature{ .mf_range = mr };
+                    } else {
+                        p.cursor = first_name_index;
+                        return null;
+                    }
+                },
+                else => {
+                    return null;
+                },
+            }
+        }
+        return null;
+    }
+
+    fn parseMfValue(p: *Parser) ?MfValue {
+        const _start = p.cursor;
+        var tok: Token = p.current();
+        switch (tok.tok_type) {
+            .NumberToken => {
+                const first_number_index = p.cursor;
+
+                const ws1 = p.consumeWhiteSpaceComment();
+                tok = p.current();
+
+                if (tok.tok_type == TT.DelimToken and p.getCurrentChar() == '/') {
+                    const div_index = p.cursor;
+                    const ws2 = p.consumeWhiteSpaceComment();
+                    tok = p.current();
+                    const second_number_index = p.cursor;
+                    tok = p.nextTok();
+                    var ratio: *Ratio = p._a.create(Ratio) catch unreachable;
+                    ratio.* = Ratio{
+                        .left = first_number_index,
+                        .ws1 = ws1,
+                        .div = div_index,
+                        .ws2 = ws2,
+                        .right = second_number_index,
+                    };
+                    p.addLocation(&ratio.loc, _start);
+                    return MfValue{ .ratio = ratio };
+                } else if (tok.tok_type == TT.RightParenthesisToken) {
+                    p.cursor = first_number_index + 1;
+                    return MfValue{ .number = first_number_index };
+                }
+                p.cursor = _start;
+                return null;
+            },
+            .DimensionToken => {
+                p.advance();
+                return MfValue{ .dimension = p.cursor - 1 };
+            },
+            .IdentToken => {
+                p.advance();
+                return MfValue{ .ident = p.cursor - 1 };
+            },
+            else => return null,
+        }
+    }
+
+    /// <mf-name> [ '<' | '>' ]? '='? <mf-value> |
+    /// <mf-value> [ '<' | '>' ]? '='? <mf-name> |
+    /// <mf-value> '<' '='? <mf-name> '<' '='? <mf-value> |
+    /// <mf-value> '>' '='? <mf-name> '>' '='? <mf-value>
+    fn parseMfRange(p: *Parser) ?*MfRange {
+        const _start = p.cursor;
+        const mf_range: *MfRange = p._a.create(MfRange) catch unreachable;
+        mf_range.* = MfRange{};
+        var tok = p.current();
+
+        if (tok.tok_type == TT.IdentToken) {
+            mf_range.mf_name_first = true;
+            mf_range.mf_name = p.cursor;
+            tok = p.nextTok();
+        } else {
+            if (p.parseMfValue()) |value| {
+                mf_range.mf_name_first = false;
+                mf_range.mf_value1 = value;
+            } else {
+                return null;
+            }
+        }
+        mf_range.ws1 = p.consumeWhiteSpaceComment();
+        mf_range.op1 = p.parseMfRangeOp() orelse return null;
+        mf_range.ws2 = p.consumeWhiteSpaceComment();
+        tok = p.current();
+
+        if (mf_range.mf_name_first) {
+            mf_range.mf_value1 = p.parseMfValue() orelse return null;
+            tok = p.current();
+        } else {
+            if (tok.tok_type == TT.IdentToken) {
+                mf_range.mf_name = p.cursor;
+                p.advance();
+
+                mf_range.ws3 = p.consumeWhiteSpaceComment();
+                tok = p.current();
+                if (tok.tok_type != TT.DelimToken) return null;
+                mf_range.op2 = p.parseMfRangeOp() orelse return null;
+                mf_range.ws4 = p.consumeWhiteSpaceComment();
+
+                mf_range.mf_value2 = p.parseMfValue() orelse return null;
+            } else {
+                return null;
+            }
+        }
+
+        p.addLocation(&mf_range.loc, _start);
+        return mf_range;
+    }
+
+    fn parseMfRangeOp(p: *Parser) ?MfRangeOp {
+        var next_tok: Token = p.tokens.items[p.cursor + 1];
+
+        const next_char = p.getNextChar();
+        const op_index = p.cursor;
+
+        switch (p.getCurrentChar()) {
+            '<' => {
+                if (next_tok.tok_type == .DelimToken) {
+                    if (next_char != '=') return null;
+                    p.advance();
+                    p.advance();
+                    return MfRangeOp{ .LessThanEqual = [2]usize{ op_index, op_index + 1 } };
+                }
+                p.advance();
+                return MfRangeOp{ .LessThan = op_index };
+            },
+            '>' => {
+                if (next_tok.tok_type == .DelimToken) {
+                    if (next_char != '=') return null;
+                    p.advance();
+                    p.advance();
+                    return MfRangeOp{ .GreaterThanEqual = [2]usize{ op_index, op_index + 1 } };
+                }
+                p.advance();
+                return MfRangeOp{ .GreaterThan = op_index };
+            },
+            '=' => {
+                p.advance();
+                return MfRangeOp{ .Equal = op_index };
+            },
+            else => {
+                return null;
+            },
+        }
     }
 
     fn parsePrelude(p: *Parser) ?Prelude {
@@ -1191,10 +1683,10 @@ pub const Parser = struct {
 
         var tok = p.current();
 
-        while (!p.end() and !p.consumeUntilUtil(until, tok.tok_type, delim_char)) {
+        while (!p.end() and !p.matchTokenType(until, tok.tok_type, delim_char)) {
             switch (tok.tok_type) {
                 TT.URLToken => {
-                    arr.append(CSSNode{ .url = p.parseUrl() }) catch unreachable;
+                    arr.append(CSSNode{ .url = p.cursor }) catch unreachable;
                     tok = p.nextTok();
                 },
                 TT.CommentToken, TT.WhitespaceToken => {
@@ -1317,14 +1809,14 @@ pub const Parser = struct {
         return func;
     }
 
-    /// Takes a List of TokenType. If the token matches any of them, stop.
+    /// consume_util: Takes a List of TokenType. If the token matches any of them, stop.
     /// delim_token_if_any: If its a delimToken, pass in the delim character
     fn parseRaw(p: *Parser, consume_until: []const TT, delim_token_if_any: ?u8) Raw {
         var raw = Raw.init(p._a);
         const _start = p.start;
 
         var t = p.current();
-        while (!p.end() and !p.consumeUntilUtil(consume_until, t.tok_type, delim_token_if_any)) : (t = p.nextTok()) {
+        while (!p.end() and !p.matchTokenType(consume_until, t.tok_type, delim_token_if_any)) : (t = p.nextTok()) {
             raw.children.append(p.cursor) catch unreachable;
         }
 
@@ -1332,9 +1824,9 @@ pub const Parser = struct {
         return raw;
     }
 
-    fn consumeUntilUtil(p: *Parser, consume_until: []const TT, token_type_to_match: TT, delim_token_if_any: ?u8) bool {
-        for (consume_until) |consume_until_unit| {
-            if (consume_until_unit == token_type_to_match) {
+    fn matchTokenType(p: *Parser, all_possible_token_types: []const TT, token_type_to_match: TT, delim_token_if_any: ?u8) bool {
+        for (all_possible_token_types) |token_type| {
+            if (token_type == token_type_to_match) {
                 if (token_type_to_match == TT.DelimToken) {
                     if (delim_token_if_any) |delim_tok| {
                         if (p.getTokenString(p.current())[0] == delim_tok) {
@@ -1461,6 +1953,13 @@ pub const Parser = struct {
 
     fn printToken(p: *Parser, tok: Token) void {
         std.debug.print("print-token: type={}, value=__{s}__\n", .{ tok.tok_type, p.code[tok.start..tok.end] });
+    }
+
+    /// Allocate value to the heap and return the pointer
+    fn heaped(p: *Parser, comptime T: type, value: T) *T {
+        var r: *T = p._a.create(T) catch unreachable;
+        r.* = value;
+        return r;
     }
 };
 

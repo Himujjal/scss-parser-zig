@@ -256,13 +256,6 @@ pub const Atrule = struct {
     }
 };
 
-/// 1px, 1rem
-pub const Dimension = struct {
-    loc: CSSLocation = default_location,
-    value: usize, // location of the value
-    unit: usize, // location of the identifier
-};
-
 pub const Block = struct {
     loc: CSSLocation = default_location,
     children: ArrayList(CSSNode),
@@ -308,7 +301,7 @@ pub const MediaQueryList = struct {
     }
 };
 
-/// ( [ <mf-plain> | <mf-boolean> | <mf-range> ] )
+/// [ <mf-plain> | <mf-boolean> | <mf-range> ]
 /// <mf-plain> = <mf-name> : <mf-value>
 /// <mf-boolean> = <mf-name>
 /// <mf-range> = <mf-name> [ '<' | '>' ]? '='? <mf-value> | <mf-value> [ '<' | '>' ]? '='? <mf-name> | <mf-value> '<' '='? <mf-name> '<' '='? <mf-value> | <mf-value> '>' '='? <mf-name> '>' '='? <mf-value>
@@ -316,26 +309,24 @@ pub const MediaQueryList = struct {
 /// <mf-value> = <number> | <dimension> | <ident> | <ratio>
 /// <ratio> = <integer> / <integer>
 /// https://csstree.github.io/docs/syntax/#Type:media-feature
-pub const MediaFeature = struct {
-    loc: CSSLocation = default_location,
-    name: Identifier,
-    children: ArrayList(CSSNode),
-    pub fn init(a: Allocator) MediaFeature {
-        return MediaFeature{ .children = ArrayList(CSSNode).init(a) };
-    }
-    pub fn deinit(self: *MediaFeature) void {
-        self.children.deinit();
-    }
+pub const MediaFeature = union(enum) {
+    mf_plain: *MfPlain,
+    mf_boolean: Identifier,
+    mf_range: *MfRange,
 };
 
 /// <media-condition> | [ not | only ]? <media-type> [ and <media-condition-without-or> ]?
 /// https://csstree.github.io/docs/syntax/#Type:media-query
 pub const MediaQuery = struct {
     loc: CSSLocation = default_location,
-    media_condition: union(enum) {
-        media_condition: *MediaCondition,
+    /// whitespace before the media query
+    ws1: ?ArrayList(WS) = null,
+    branches: union(enum) {
+        media_condition: MediaCondition,
         media_query_branch_2: *MediaQueryBranch2,
     } = undefined,
+    /// whitespace after the media query
+    ws2: ?ArrayList(WS) = null,
 
     pub fn init() MediaQuery {
         return MediaQuery{};
@@ -346,79 +337,92 @@ pub const MediaQuery = struct {
 };
 
 /// [ not | only ]? <media-type> [ and <media-condition-without-or> ]?
-const MediaQueryBranch2 = struct {
+pub const MediaQueryBranch2 = struct {
     loc: CSSLocation = default_location,
 
     /// if null, not present, false = 'only', true = 'not'
-    isNot: ?bool,
-    media_type: MediaType,
+    is_not: ?bool = null,
+    not_only_index: usize = 0,
 
-    media_condition_without_or_branch: ?struct {
-        is_and: bool,
-        media_condition_without_or: *MediaConditionWithoutOr,
-    },
+    /// space between ['not' | 'only'] and media_type
+    ws1: ?ArrayList(usize) = null,
+
+    media_type: Identifier = 0,
+
+    /// space between media_type and 'and'
+    ws2: ?ArrayList(usize) = null,
+    /// space between 'and' and media_condition_without_or
+    ws3: ?ArrayList(usize) = null,
+
+    media_condition_without_or: ?MediaConditionWithoutOr = null,
 };
 
+/// <media-condition> = <media-not> | <media-and> | <media-or> | <media-in-parens>
+/// If media_and or media_or has one child, understand its a media_in_parens
 pub const MediaCondition = union(enum) {
     media_not: *MediaNot,
-    media_and: *MediaAnd,
-    media_or: *MediaOr,
-    media_in_parens: *MediaInParens,
+    media_and: *MediaAndOr,
+    media_or: *MediaAndOr,
 };
 
-const MediaNot = struct {
-    loc: CSSLocation,
-    media_in_parens: *MediaInParens,
-    a: Allocator,
-    pub fn init(a: Allocator) *MediaNot {
-        var media_in_parens: *MediaInParens = a.create(MediaInParens);
-        media_in_parens.* = MediaInParens.init(a);
-        return MediaNot{ .media_in_parens = media_in_parens };
-    }
-    pub fn deinit(self: *MediaNot) void {
-        self.media_in_parens.deinit();
-        self.a.destroy(self.media_in_parens);
-    }
+pub const MediaNot = struct {
+    loc: CSSLocation = default_location,
+    /// index of the not symbol
+    not: usize = 0,
+    /// WS between 'not' and media_in_parens
+    ws1: ?ArrayList(usize) = null,
+    media_in_parens: *MediaInParens = undefined,
 };
 
 /// <media-in-parens> [ and <media-in-parens> ]+
-const MediaAnd = struct {
-    loc: CSSLocation,
+pub const MediaAndOr = struct {
+    loc: CSSLocation = default_location,
+    is_and: bool = true,
+    /// list of all ws1 between ')' and 'and'
+    ws1_list: ArrayList(?ArrayList(usize)),
+    /// list of all ws1 between and and '('
+    ws2_list: ArrayList(?ArrayList(usize)),
+    /// list of all the 'and' or 'or'
+    and_or_list: ArrayList(usize),
     children: ArrayList(MediaInParens),
-    pub fn init(a: Allocator) MediaAnd {
-        return MediaAnd{ .children = ArrayList(MediaInParens).init(a) };
+    pub fn init(a: Allocator) MediaAndOr {
+        return MediaAndOr{
+            .children = ArrayList(MediaInParens).init(a),
+            .ws1_list = ArrayList(?ArrayList(usize)).init(a),
+            .ws2_list = ArrayList(?ArrayList(usize)).init(a),
+            .and_or_list = ArrayList(usize).init(a),
+        };
     }
-    pub fn deinit(self: *MediaAnd) void {
+    pub fn deinit(self: *MediaAndOr) void {
         self.children.deinit();
+        self.ws1_list.deinit();
+        self.ws2_list.deinit();
+        self.and_or_list.deinit();
     }
 };
 
-/// <media-in-parens> [ or <media-in-parens> ]+
-const MediaOr = struct {
-    loc: CSSLocation,
-    children: ArrayList(MediaInParens),
-    pub fn init(a: Allocator) MediaAnd {
-        return MediaOr{ .children = ArrayList(MediaInParens).init(a) };
-    }
-    pub fn deinit(self: *MediaOr) void {
-        self.children.deinit();
-    }
+/// '(' <content> ')'
+pub const MediaInParens = struct {
+    loc: CSSLocation = default_location,
+    /// between '(' and media_condition
+    ws1: ?ArrayList(WS) = null,
+    content: union(enum) {
+        media_condition: MediaCondition,
+        media_feature: MediaFeature,
+        general_enclosed: *GeneralEnclosed,
+    } = undefined,
+    /// between media_condition and ')'
+    ws2: ?ArrayList(WS) = null,
 };
 
-const MediaInParens = union(enum) {
-    media_condition: *MediaCondition,
-    media_feature: *MediaFeature,
-    general_enclosed: GeneralEnclosed,
-};
-
-const GeneralEnclosed = union(enum) {
-    function: FunctionNode,
-    ident: GeneralEnclosedIdent,
+pub const GeneralEnclosed = union(enum) {
+    function: *FunctionNode,
+    ident: *GeneralEnclosedIdent,
 };
 
 pub const GeneralEnclosedIdent = struct {
     loc: CSSLocation = default_location,
-    ident: usize = 0,
+    ident: Identifier = 0,
     children: ArrayList(CSSNode),
     fn init(a: Allocator) GeneralEnclosedIdent {
         return GeneralEnclosedIdent{ .children = ArrayList(CSSNode).init(a) };
@@ -428,10 +432,11 @@ pub const GeneralEnclosedIdent = struct {
     }
 };
 
-const MediaConditionWithoutOr = union(enum) {
-    media_not: MediaNot,
-    media_and: MediaAnd,
-    media_in_parens: MediaInParens,
+/// <media-condition-without-or> = <media-not> | <media-and> | <media-in-parens>
+pub const MediaConditionWithoutOr = union(enum) {
+    media_not: *MediaNot,
+    /// if media_and has only 1 child, then its a media_paren
+    media_and: *MediaAndOr,
 };
 
 /// <mf-name> [ '<' | '>' ]? '='? <mf-value> |
@@ -440,27 +445,57 @@ const MediaConditionWithoutOr = union(enum) {
 /// <mf-value> '>' '='? <mf-name> '>' '='? <mf-value>
 pub const MfRange = struct {
     loc: CSSLocation = default_location,
-    node_ranges: ArrayList(CSSNode),
-    pub fn init(a: Allocator) MfRange {
-        return MfRange{ .node_ranges = ArrayList(CSSNode).init(a) };
-    }
-    pub fn deinit(mf: *MfRange) void {
-        mf.node_ranges.deinit();
-    }
+
+    /// if (mf_name <= mf_value) and not (mf_value <= mf_name)
+    /// basically if mf_name comes first in comparison
+    mf_name_first: bool = false,
+
+    /// mf_name
+    mf_name: Identifier = undefined,
+    /// WS between first value/name and the first op
+    ws1: ?ArrayList(usize) = null,
+    /// first operator
+    op1: ?MfRangeOp = null,
+    /// WS between first operator and the first value/name
+    ws2: ?ArrayList(usize) = null,
+    /// WS between name and second op
+    ws3: ?ArrayList(usize) = null,
+    /// WS between second op and second value
+    ws4: ?ArrayList(usize) = null,
+    mf_value1: MfValue = undefined,
+    /// second operator
+    op2: ?MfRangeOp = null,
+    /// second value
+    mf_value2: ?MfValue = null,
 };
 
+/// operation like for range and its token index
+pub const MfRangeOp = union(enum) {
+    GreaterThan: usize, // >
+    GreaterThanEqual: [2]usize, // >=
+    LessThan: usize, // <
+    LessThanEqual: [2]usize, // <=
+    Equal: usize,
+};
+
+// name ':' value
 pub const MfPlain = struct {
     loc: CSSLocation,
-    name: MfName,
+    name: Identifier,
+    /// WS between name and ':'
+    ws1: ?ArrayList(WS) = null,
+    /// WS between ':' and value
+    ws2: ?ArrayList(WS) = null,
     value: MfValue,
 };
+
 pub const MfBoolean = Identifier;
 pub const MfName = Identifier;
 pub const MfValue = union(enum) {
-    number: Number,
-    dimension: Dimension,
-    ident: Identifier,
-    ratio: Ratio,
+    number: Number, // numberToken
+    dimension: Dimension, // dimensionToken
+    ident: Identifier, // identifier
+    ratio: *Ratio, // ratio
 };
 const MediaType = Identifier; // identifier
 
@@ -489,6 +524,9 @@ pub const Percentage = struct {
 pub const Ratio = struct {
     loc: CSSLocation = default_location,
     left: usize,
+    ws1: ?ArrayList(WS) = null,
+    div: usize = 0,
+    ws2: ?ArrayList(WS) = null,
     right: usize,
 };
 
@@ -660,45 +698,7 @@ pub const UnicodeRange = struct {
     }
 };
 
-pub const URL = struct {
-    loc: CSSLocation = default_location,
-    /// index of the URL token
-    url: usize = 0,
-    pub fn init() URL {
-        return URL{};
-    }
-};
-
-/// url( <string> <url-modifier>* )
-// pub const URLBranch1 = struct {
-//     loc: CSSLocation = default_location,
-//     string: StringNode,
-//     children: ArrayList(URLModifier),
-//     pub fn init(a: Allocator) URLBranch1 {
-//         return URLBranch1{ .children = ArrayList(URLModifier).init(a) };
-//     }
-//     pub fn deinit(self: *URLBranch1) void {
-//         self.children.deinit();
-//     }
-// };
-
-// pub const URLModifier = struct {
-//     loc: CSSLocation = default_location,
-//     branches: union(enum) {
-//         ident: Identifier,
-//         branch2: FunctionNode,
-//     },
-//     pub fn init() URLModifier {
-//         return URLModifier{ .brances = .{ .ident = 0 } };
-//     }
-//     pub fn deinit(self: *URLModifier) void {
-//         switch (self.brances) {
-//             .branch2 => |b| b.deinit(),
-//             .ident => {},
-//         }
-//     }
-// };
-
+pub const URL = usize;
 pub const DeclValue = struct {
     loc: CSSLocation = default_location,
 
@@ -737,6 +737,7 @@ pub const _Error = usize;
 
 pub const Brackets = ArrayList(CSSNode);
 pub const Number = usize;
+pub const Dimension = usize;
 pub const Operator = usize;
 
 /// Token with TokenType.StringToken

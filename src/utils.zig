@@ -4,14 +4,11 @@ const Token = @import("token.zig").Token;
 
 const LOC = @import("nodes.zig").CSSLocation;
 
-
 // ToLower converts all characters in the byte slice from A-Z to a-z.
 pub fn toLower(allocator: std.mem.Allocator, src: []const u8) []const u8 {
-    var newData: []u8 = allocator.alloc(u8, src.len) catch unreachable;
-    for (src) |c, i| {
-        newData[i] = std.ascii.toLower(c);
-    }
-    return src;
+    var new_data: []u8 = allocator.alloc(u8, src.len) catch unreachable;
+    for (src) |c, i| new_data[i] = std.ascii.toLower(c);
+    return new_data;
 }
 
 pub fn indexByte(b: []const u8, c: u8) i32 {

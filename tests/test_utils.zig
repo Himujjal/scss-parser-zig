@@ -35,7 +35,7 @@ pub fn testFile(comptime folder: []const u8, comptime file_without_ext: []const 
         switch (sub_test) {
             .Object => |_sub_test| {
                 if (_sub_test.get("source")) |src| {
-                    print("\n>>>>> '{s} > {s}' Test\n", .{ test_name, key });
+                    print("\t>>>>> '{s} > {s}' Test\n", .{ test_name, key });
 
                     const source = src.String;
                     if (to_log) print("\nsource: {s}\n\n", .{source});
@@ -46,8 +46,15 @@ pub fn testFile(comptime folder: []const u8, comptime file_without_ext: []const 
                     var r = CSSRenderer.init(allocator);
                     const output = r.renderCSS(source, p.tree, p.tokens);
 
-                    expect(std.mem.eql(u8, source, output)) catch |err| {
-                        std.debug.print("EXPECTED: __{s}__ | GOT: __{s}__\n", .{ source, output });
+                    const generate: JSONValue = _sub_test.get("generate") orelse JSONValue{ .String = "" };
+                    const generated_str = generate.String;
+
+                    const result = std.mem.eql(u8, source, output) or std.mem.eql(u8, generated_str, output);
+
+                    expect(result) catch |err| {
+                        var expected = source;
+                        std.debug.print("EXPECTED: __{s}__ | GOT: __{s}__\n", .{ expected, output });
+                        if (generated_str.len > 0) std.debug.print("Also Possible: __{s}__", .{generated_str});
                         p.deinit();
                         r.deinit();
                         return err;

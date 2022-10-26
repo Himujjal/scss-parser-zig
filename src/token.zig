@@ -1,6 +1,6 @@
 const std = @import("std");
-const utils = @import("./utils.zig");
-const RadixTree = @import("./radix_tree.zig").StringRadixTree;
+const utils = @import("utils.zig");
+const RadixTree = @import("radix_tree.zig").StringRadixTree;
 
 const Allocator = std.mem.Allocator;
 
