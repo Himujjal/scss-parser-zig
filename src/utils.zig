@@ -4,6 +4,15 @@ const Token = @import("token.zig").Token;
 
 const LOC = @import("nodes.zig").CSSLocation;
 
+pub fn equalStrings(str: []const u8, strs: [][]const u8) bool {
+	for (strs) |s| if (std.mem.eql(u8, s, str) == false) return false;
+	return true;
+}
+
+pub fn eqlStr(str1: []const u8, str2: []const u8) bool {
+	return std.mem.eql(u8, str1, str2);
+}
+
 // ToLower converts all characters in the byte slice from A-Z to a-z.
 pub fn toLower(allocator: std.mem.Allocator, src: []const u8) []const u8 {
     var new_data: []u8 = allocator.alloc(u8, src.len) catch unreachable;

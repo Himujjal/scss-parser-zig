@@ -78,6 +78,7 @@ pub const CSSNode = union(enum) {
     media_feature: MediaFeature,
     media_query: MediaQuery,
     media_query_list: MediaQueryList,
+    supports: SupportsCondition,
     nth: Nth,
     number_node: Number,
     operator: Operator,
@@ -192,10 +193,7 @@ pub const Declaration = struct {
     }
 };
 
-pub const CSSVariable = struct {
-    loc: CSSLocation,
-    ident: Identifier,
-};
+pub const CSSVariable = usize;
 
 pub const Property = struct {
     loc: CSSLocation = default_location,
@@ -409,7 +407,7 @@ pub const MediaInParens = struct {
     content: union(enum) {
         media_condition: MediaCondition,
         media_feature: MediaFeature,
-        general_enclosed: *GeneralEnclosed,
+        general_enclosed: GeneralEnclosed,
     } = undefined,
     /// between media_condition and ')'
     ws2: ?ArrayList(WS) = null,
@@ -498,6 +496,85 @@ pub const MfValue = union(enum) {
     ratio: *Ratio, // ratio
 };
 const MediaType = Identifier; // identifier
+
+/// ('not' <supports-in-parens>) |
+/// (<supports-in-parens> ('and' <supports-in-parens> )\* |
+/// (<supports-in-parens> ('or' <supports-in-parens> )\*
+pub const SupportsCondition = union(enum) {
+    not_supports_in_parens: *NotSupportsInParens,
+    supports_in_parens_and_or: *SupportsInParensAndOr,
+};
+
+/// "not" <supports_in_parens>
+pub const NotSupportsInParens = struct {
+    loc: CSSLocation = default_location,
+    not_index: usize = 0,
+	ws1: ?ArrayList(usize) = null,
+    supports_parens: SupportsInParens = undefined,
+};
+
+/// <supports-in-parens> (('and' | 'or') <supports-in-parens> )\*
+pub const SupportsInParensAndOr = struct {
+    loc: CSSLocation = default_location,
+    list_supports_in_parens: ArrayList(SupportsInParens),
+
+    /// list of all the ws between <supports_in_parens> and "and" | "or"
+    ws1_list: ArrayList(?ArrayList(usize)),
+
+    /// index of all the "and" or "or"
+    and_or_list: ArrayList(usize),
+
+    /// list of all the ws between ("and" | "or") & <supports_in_parens>
+    ws2_list: ArrayList(?ArrayList(usize)),
+
+    /// is "and". false if "or"
+    is_and: bool = false,
+
+    pub fn init(a: Allocator) SupportsInParensAndOr {
+        return SupportsInParensAndOr{
+			.list_supports_in_parens = ArrayList(SupportsInParens).init(a),
+			.ws1_list = ArrayList(?ArrayList(usize)).init(a),
+			.ws2_list = ArrayList(?ArrayList(usize)).init(a),
+			.and_or_list = ArrayList(usize).init(a),
+		};
+    }
+    pub fn deinit(s: *SupportsInParensAndOr) void {
+        s.list_supports_in_parens.deinit();
+    }
+};
+
+pub const SupportsInParens = union(enum) {
+    supports_condition: *SupportsConditionWithParens,
+    supports_feature: SupportsFeature,
+    general_enclosed: GeneralEnclosed,
+};
+
+pub const SupportsConditionWithParens = struct {
+    loc: CSSLocation = default_location,
+    /// ws between '(' and support_content
+    ws1: ?ArrayList(usize) = null,
+
+    condition: SupportsCondition = undefined,
+
+    /// ws between support_content and ')'
+    ws2: ?ArrayList(usize) = null,
+};
+
+pub const SupportsFeature = union(enum) {
+    supports_decl: *SupportsDecl,
+    supports_selector_fn: *SupportsSelectorFn,
+};
+
+/// '(' <declaration> ')'
+pub const SupportsDecl = struct {
+    loc: CSSLocation = default_location,
+	ws1: ?ArrayList(usize) = null,
+    declaration: Declaration = undefined,
+	ws2: ?ArrayList(usize) = null,
+};
+
+/// ('selector' | 'font-tech' | 'font-format')'(' <complex-selector> ')'
+pub const SupportsSelectorFn = FunctionNode;
 
 /// <an-plus-b> | 'even' | 'odd'
 pub const Nth = struct {

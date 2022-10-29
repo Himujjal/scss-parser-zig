@@ -24,6 +24,8 @@ const WT = TT.WhitespaceToken;
 const Error = _error.Error;
 const ParserErrorType = _error.ParserErrorType;
 
+const eqlStr = utils.eqlStr;
+
 // ========================================  NODES ========================================
 const StyleSheet = nodes.StyleSheet;
 const Rule = nodes.Rule;
@@ -59,6 +61,7 @@ const Ratio = nodes.Ratio;
 const MfRangeOp = nodes.MfRangeOp;
 const MediaNot = nodes.MediaNot;
 const MediaAndOr = nodes.MediaAndOr;
+const GeneralEnclosed = nodes.GeneralEnclosed;
 
 const CSSVariable = nodes.CSSVariable;
 const TypeSelectorBranch = nodes.TypeSelectorBranch;
@@ -66,6 +69,16 @@ const Combinator = nodes.Combinator;
 const AttributeSelector = nodes.AttributeSelector;
 const PseudoClassSelector = nodes.PseudoClassSelector;
 const PseudoElementSelector = nodes.PseudoElementSelector;
+
+const SupportsCondition = nodes.SupportsCondition;
+const NotSupportsInParens = nodes.NotSupportsInParens;
+const SupportsInParensAndOr = nodes.SupportsInParensAndOr;
+const SupportsConditionWithParens = nodes.SupportsConditionWithParens;
+const SupportsFeature = nodes.SupportsFeature;
+const SupportsDecl = nodes.SupportsDecl;
+const SupportsSelectorFn = nodes.SupportsSelectorFn;
+const SupportsInParens = nodes.SupportsInParens;
+
 const URL = nodes.URL;
 // =======================================================================================
 
@@ -75,7 +88,7 @@ pub const ParserOptions = struct {
     parse_rule_prelude: bool = true,
     /// TODO: Implement this
     parse_selectors: bool = false,
-    parse_media_prelude: bool = false,
+    parse_media_prelude: bool = true,
     parse_custom_property: bool = true,
     parse_value: bool = true,
     skip_ws_comments: bool = false,
@@ -130,7 +143,7 @@ pub const Parser = struct {
 
     pub fn init(allocator: Allocator, opt: ParserOptions) Self {
         var options = opt;
-        options.parse_media_prelude = false;
+        options.parse_media_prelude = true;
 
         var parser_arena = allocator.create(ArenaAllocator) catch unreachable;
         parser_arena.* = ArenaAllocator.init(allocator);
@@ -258,7 +271,7 @@ pub const Parser = struct {
         }
     }
 
-    fn eatOptional(p: *Parser, tts: []TT) void {
+    fn eatOptional(p: *Parser, tts: []const TT) ?void {
         const tok_type = p.current().tok_type;
         for (tts) |tt| {
             if (tok_type == tt) {
@@ -267,11 +280,14 @@ pub const Parser = struct {
             }
         }
         p.addExpectedTokenFoundThisError(tts[0]);
+        return null;
     }
 
-    fn eat(p: *Parser, tt: TT) void {
+    /// Eat the current token and advance cursor. If not. Add an error
+    fn eat(p: *Parser, tt: TT) ?void {
         if (p.current().tok_type != tt) {
             p.addExpectedTokenFoundThisError(tt);
+            return null;
         }
         p.advance();
     }
@@ -450,7 +466,7 @@ pub const Parser = struct {
 
         var tok = p.current();
 
-		const at_rule_type_str = utils.toLower(p._a, p.code[tok.start + 1 .. tok.end]);
+        const at_rule_type_str = utils.toLower(p._a, p.code[tok.start + 1 .. tok.end]);
         at_rule.rule_type = p.radix_tree.get(at_rule_type_str) orelse AtKeywordTypes.Custom;
         at_rule.rule_index = p.cursor;
 
@@ -498,15 +514,14 @@ pub const Parser = struct {
 
         switch (rule_type) {
             AtKeywordTypes.Media => {
-                // whitespaces and comments
-                var ws_comments = p.consumeWhiteSpaceCommentCSSNode();
-                at_rule_prelude.children.appendSlice(ws_comments.toOwnedSlice()) catch unreachable;
-
                 if (p.options.parse_media_prelude) {
-                    const media_query_list = p.parseMediaQueryList();
-                    at_rule_prelude.children.append(
-                        CSSNode{ .media_query_list = media_query_list },
-                    ) catch unreachable;
+                    if (p.parseMediaQueryList()) |media_query_list| {
+                        at_rule_prelude.children.append(CSSNode{ .media_query_list = media_query_list }) catch unreachable;
+                    } else {
+                        at_rule_prelude.children.append(
+                            CSSNode{ .raw = p.parseRaw(&[_]TT{ TT.SemicolonToken, TT.LeftBraceToken, TT.EOF }, null) },
+                        ) catch unreachable;
+                    }
                 } else {
                     const raw: Raw = p.parseRaw(&[_]TT{ TT.LeftBraceToken, TT.SemicolonToken }, null);
                     at_rule_prelude.children.append(CSSNode{ .raw = raw }) catch unreachable;
@@ -577,8 +592,13 @@ pub const Parser = struct {
 
                 switch (tok.tok_type) {
                     TT.IdentToken => {
-                        const media_query_list = p.parseMediaQueryList();
-                        at_rule_prelude.children.append(CSSNode{ .media_query_list = media_query_list }) catch unreachable;
+                        if (p.parseMediaQueryList()) |media_query_list| {
+                            at_rule_prelude.children.append(CSSNode{ .media_query_list = media_query_list }) catch unreachable;
+                        } else {
+                            at_rule_prelude.children.append(
+                                CSSNode{ .raw = p.parseRaw(&[_]TT{ TT.LeftBraceToken, TT.EOF, TT.SemicolonToken }, null) },
+                            ) catch unreachable;
+                        }
                     },
                     else => {
                         at_rule_prelude.children.append(CSSNode{
@@ -638,6 +658,25 @@ pub const Parser = struct {
             },
             AtKeywordTypes.Page => {
                 // TODO: Pages
+                if (p.parseSupportsCondition()) |supports_condition| {
+                    at_rule_prelude.children.append(CSSNode{ .supports = supports_condition }) catch unreachable;
+                } else {
+                    p.cursor = _start;
+                    p.start = _start;
+                    p.parseAtRulePreludeRaw(
+                        &at_rule_prelude.children,
+                        &[_]TT{ TT.LeftParenthesisToken, TT.SemicolonToken, TT.RightBraceToken },
+                    );
+                }
+            },
+            AtKeywordTypes.Supports => {
+                if (p.parseSupportsCondition()) |supports_condition| {
+                    at_rule_prelude.children.append(CSSNode{ .supports = supports_condition }) catch unreachable;
+                } else {
+                    p.cursor = _start;
+                    p.start = _start;
+                    p.parseAtRulePreludeRaw(&at_rule_prelude.children, &[_]TT{ TT.SemicolonToken, TT.LeftBraceToken });
+                }
             },
             else => {
                 p.parseAtRulePreludeRaw(&at_rule_prelude.children, &[_]TT{ TT.LeftBraceToken, TT.SemicolonToken });
@@ -648,7 +687,132 @@ pub const Parser = struct {
         return at_rule_prelude;
     }
 
-    fn parseCSSVariable(p: *Parser) UnMatchErr!CSSVariable {
+    fn parseSupportsCondition(p: *Parser) ?SupportsCondition {
+        const tok_type = p.current().tok_type;
+        if (tok_type == TT.IdentToken and std.mem.eql(u8, p.getCurrTokStr(), "not")) {
+            const not_supports_in_parens = p.parseNotSupportsInParens() orelse return null;
+            return SupportsCondition{ .not_supports_in_parens = not_supports_in_parens };
+        } else if (tok_type == TT.LeftParenthesisToken or tok_type == TT.FunctionToken) {
+            const supports_in_parens_and_or = p.parseSupportsInParensAndOr() orelse return null;
+            return SupportsCondition{ .supports_in_parens_and_or = supports_in_parens_and_or };
+        }
+        return null;
+    }
+
+    fn parseNotSupportsInParens(p: *Parser) ?*NotSupportsInParens {
+        const _start = p.start;
+        var not_supports_in_parens = p.heaped(NotSupportsInParens, NotSupportsInParens{});
+        not_supports_in_parens.not_index = p.cursor;
+        p.advance();
+        not_supports_in_parens.ws1 = p.consumeWhiteSpaceComment();
+
+        const supports_parens = p.parseSupportsInParens() orelse return null;
+        not_supports_in_parens.supports_parens = supports_parens;
+
+        p.addLocation(&not_supports_in_parens.loc, _start);
+        return not_supports_in_parens;
+    }
+
+    fn parseSupportsInParensAndOr(p: *Parser) ?*SupportsInParensAndOr {
+        const _start = p.start;
+        var supports_in_parens_and_or = p.heaped(SupportsInParensAndOr, SupportsInParensAndOr.init(p._a));
+
+        var tt = p.current().tok_type;
+        var is_and: ?bool = null;
+
+        var checkpoint = p.cursor;
+        while (!p.end() and tt != TT.LeftBraceToken and tt != TT.SemicolonToken) {
+            if (p.parseSupportsInParens()) |supports_in_parens| {
+                checkpoint = p.cursor;
+                supports_in_parens_and_or.list_supports_in_parens.append(supports_in_parens) catch unreachable;
+                supports_in_parens_and_or.ws1_list.append(p.consumeWhiteSpaceComment()) catch unreachable;
+
+                if (p.current().tok_type == TT.IdentToken) {
+                    if (eqlStr(p.getCurrTokStr(), "and") and (is_and == null or is_and.?)) {
+                        is_and = true;
+                        supports_in_parens_and_or.and_or_list.append(p.cursor) catch unreachable;
+                    } else if (eqlStr(p.getCurrTokStr(), "or") and (is_and == null or !is_and.?)) {
+                        is_and = false;
+                        supports_in_parens_and_or.and_or_list.append(p.cursor) catch unreachable;
+                    } else {
+                        return null;
+                    }
+                    p.advance();
+                }
+                supports_in_parens_and_or.ws2_list.append(p.consumeWhiteSpaceComment()) catch unreachable;
+            } else {
+                return null;
+            }
+            tt = p.current().tok_type;
+        }
+        p.cursor = checkpoint;
+
+        p.addLocation(&supports_in_parens_and_or.loc, _start);
+        return supports_in_parens_and_or;
+    }
+
+    fn parseSupportsInParens(p: *Parser) ?SupportsInParens {
+        const _start = p.start;
+        switch (p.current().tok_type) {
+            .LeftParenthesisToken => {
+                _ = p.eat(TT.LeftParenthesisToken);
+
+                const ws1 = p.consumeWhiteSpaceComment();
+                var tok = p.current();
+
+                if (tok.tok_type == TT.IdentToken or tok.tok_type == TT.CustomPropertyNameToken) {
+                    if (eqlStr("not", p.getCurrTokStr())) {
+                        var supports_cond_with_parens = p.heaped(SupportsConditionWithParens, SupportsConditionWithParens{});
+                        supports_cond_with_parens.ws1 = ws1;
+
+                        var not_supports_in_parens = p.parseNotSupportsInParens() orelse return null;
+                        supports_cond_with_parens.condition = SupportsCondition{ .not_supports_in_parens = not_supports_in_parens };
+
+                        supports_cond_with_parens.ws2 = p.consumeWhiteSpaceComment();
+                        p.eat(.RightParenthesisToken) orelse return null;
+
+                        p.addLocation(&supports_cond_with_parens.loc, _start);
+                        return SupportsInParens{ .supports_condition = supports_cond_with_parens };
+                    } else {
+                        const supports_decl: *SupportsDecl = p.heaped(SupportsDecl, SupportsDecl{});
+                        supports_decl.ws1 = ws1;
+                        supports_decl.declaration = p.parseDeclaration(false) orelse return null;
+                        supports_decl.ws2 = p.consumeWhiteSpaceComment();
+
+                        p.eat(.RightParenthesisToken) orelse return null;
+
+                        return SupportsInParens{ .supports_feature = SupportsFeature{
+                            .supports_decl = supports_decl,
+                        } };
+                    }
+                } else if (tok.tok_type == TT.LeftParenthesisToken) {
+                    var supports_cond_with_parens = p.heaped(SupportsConditionWithParens, SupportsConditionWithParens{});
+                    supports_cond_with_parens.ws1 = p.consumeWhiteSpaceComment();
+                    supports_cond_with_parens.condition = p.parseSupportsCondition() orelse return null;
+                    supports_cond_with_parens.ws2 = p.consumeWhiteSpaceComment();
+                    p.addLocation(&supports_cond_with_parens.loc, _start);
+                    return SupportsInParens{ .supports_condition = supports_cond_with_parens };
+                }
+            },
+            .FunctionToken => {
+                const s = p.getCurrTokStr();
+                const is_special_func = eqlStr(s, "selector") or eqlStr(s, "font-tech") or eqlStr(s, "font-format");
+                if (is_special_func) {
+                    // Is Supports Selector Function
+                    const func = p.parseFunction() orelse return null;
+                    const f = p.heaped(FunctionNode, func);
+                    return SupportsInParens{ .supports_feature = SupportsFeature{ .supports_selector_fn = f } };
+                } else {
+                    const general_enclosed = p.parseGeneralEnclosed() orelse return null;
+                    return SupportsInParens{ .general_enclosed = general_enclosed };
+                }
+            },
+            else => return null,
+        }
+        return null;
+    }
+
+    fn parseCSSVariable(p: *Parser) ?CSSVariable {
         const _start = p.start;
         var tok = p.current();
         if (tok.tok_type == .DelimToken and p.getCurrentChar() == '-' and
@@ -658,9 +822,13 @@ pub const Parser = struct {
             p.cursor += 3;
             var loc = Location{};
             p.addLocation(&loc, _start);
-            return CSSVariable{ .loc = loc, .ident = p.cursor - 1 };
-        }
-        return UnMatchErr.UnMatch;
+            return p.cursor - 1;
+        } else if (tok.tok_type == .CustomPropertyNameToken) {
+			const var_name = p.cursor; 
+			p.advance();
+			return var_name;
+		}
+        return null;
     }
 
     fn parseAtRulePreludeRaw(p: *Parser, children: *ArrayList(CSSNode), tokens: []const TT) void {
@@ -668,18 +836,19 @@ pub const Parser = struct {
         children.append(CSSNode{ .raw = raw }) catch unreachable;
     }
 
-    fn parseMediaQueryList(p: *Parser) MediaQueryList {
+    fn parseMediaQueryList(p: *Parser) ?MediaQueryList {
         var media_query_list = MediaQueryList.init(p._a);
         const _start = p.start;
 
         var curr_tt = p.current().tok_type;
 
-        while (!p.end() and (curr_tt != TT.RightBraceToken and curr_tt != TT.SemicolonToken)) : (curr_tt = p.current().tok_type) {
+        while (!p.end() and (curr_tt != TT.LeftBraceToken and curr_tt != TT.SemicolonToken)) : (curr_tt = p.current().tok_type) {
             var media_query = p.parseMediaQuery();
             if (media_query) |mq| {
                 media_query_list.children.append(mq) catch unreachable;
             } else {
                 // TODO: error
+                return null;
             }
             if (p.current().tok_type == TT.CommaToken) p.advance();
         }
@@ -696,7 +865,6 @@ pub const Parser = struct {
         const checkpoint = p.cursor;
 
         const media_condition = p.parseMediaCondition();
-
         if (media_condition) |mc| {
             media_query.branches.media_condition = mc;
         } else {
@@ -820,7 +988,7 @@ pub const Parser = struct {
                 media_query_branch_2.not_only_index = p.cursor;
                 tok = p.nextTok();
                 media_query_branch_2.ws1 = p.consumeWhiteSpaceComment();
-                tok = p.nextTok();
+                tok = p.current();
             }
             if (tok.tok_type == .IdentToken) {
                 media_query_branch_2.media_type = p.cursor;
@@ -846,7 +1014,7 @@ pub const Parser = struct {
             }
         }
         switch (p.current().tok_type) {
-            .CommaToken, .RightBraceToken, .SemicolonToken => {
+            .CommaToken, .LeftBraceToken, .SemicolonToken => {
                 p.addLocation(&media_query_branch_2.loc, _start);
                 return media_query_branch_2;
             },
@@ -956,11 +1124,8 @@ pub const Parser = struct {
                 return null;
             }
         } else if (tok.tok_type == TT.FunctionToken) {
-            var function_node: *FunctionNode = p._a.create(FunctionNode) catch unreachable;
-            const f = p.parseFunction();
-            if (f) |_f| {
-                function_node.* = _f;
-                media_in_parens.content.general_enclosed.function = function_node;
+            if (p.parseGeneralEnclosed()) |general_enclosed| {
+                media_in_parens.content = .{ .general_enclosed = general_enclosed };
             } else {
                 p.cursor = _start;
                 return null;
@@ -971,6 +1136,11 @@ pub const Parser = struct {
 
         p.addLocation(&media_in_parens.loc, _start);
         return media_in_parens;
+    }
+
+    fn parseGeneralEnclosed(p: *Parser) ?GeneralEnclosed {
+        const f = p.parseFunction() orelse return null;
+        return GeneralEnclosed{ .function = p.heaped(FunctionNode, f) };
     }
 
     fn parseMediaFeature(p: *Parser) ?MediaFeature {
@@ -1032,6 +1202,7 @@ pub const Parser = struct {
         switch (tok.tok_type) {
             .NumberToken => {
                 const first_number_index = p.cursor;
+                p.advance();
 
                 const ws1 = p.consumeWhiteSpaceComment();
                 tok = p.current();
@@ -1491,7 +1662,7 @@ pub const Parser = struct {
             );
         }
 
-        p.eat(TT.RightBracketToken);
+        p.eat(TT.RightBracketToken) orelse return null;
 
         p.addLocation(&attr.loc, _start);
         return attr;
@@ -1503,7 +1674,7 @@ pub const Parser = struct {
         var pseudo_class = PseudoClassSelector.init();
         const _start = p.start;
 
-        p.eat(TT.ColonToken);
+        p.eat(TT.ColonToken) orelse return null;
 
         var curr = p.current();
         if (curr.tok_type == TT.FunctionToken) {
@@ -1526,7 +1697,7 @@ pub const Parser = struct {
         var pes = PseudoElementSelector.init();
         const _start = p.start;
 
-        p.eat(TT.ColonToken);
+        p.eat(TT.ColonToken) orelse return null;
 
         if (p.parsePseudoClassSelector()) |_pcs| {
             pes.class_selector = _pcs;
@@ -1542,7 +1713,7 @@ pub const Parser = struct {
     fn parseBlock(p: *Parser, is_declaration: bool) Block {
         var block = Block.init(p._a);
         const _start = p.start;
-        p.eat(TT.LeftBraceToken);
+        _ = p.eat(TT.LeftBraceToken);
 
         if (is_declaration) {
             // -- Consume Declaration
@@ -1558,7 +1729,7 @@ pub const Parser = struct {
                         block.children.append(CSSNode{ .at_rule = at_rule }) catch unreachable;
                     },
                     else => {
-                        var declaration = p.parseDeclaration();
+                        var declaration = p.parseDeclaration(true);
                         if (declaration) |d| {
                             block.children.append(CSSNode{ .declaration = d }) catch unreachable;
                         } else {
@@ -1571,7 +1742,7 @@ pub const Parser = struct {
             }
 
             if (!p.end()) {
-                p.eat(TT.RightBraceToken);
+                _ = p.eat(TT.RightBraceToken);
             }
         } else {
             // consume rule
@@ -1594,7 +1765,7 @@ pub const Parser = struct {
             }
 
             if (!p.end()) {
-                p.eat(TT.RightBraceToken);
+                _ = p.eat(TT.RightBraceToken);
             }
         }
 
@@ -1602,7 +1773,7 @@ pub const Parser = struct {
         return block;
     }
 
-    fn parseDeclaration(p: *Parser) ?Declaration {
+    fn parseDeclaration(p: *Parser, is_in_block: bool) ?Declaration {
         if (p.current().tok_type == TT.SemicolonToken) {
             return null;
         }
@@ -1618,11 +1789,11 @@ pub const Parser = struct {
         // consume whitespace before color
         declaration.ws1 = p.consumeWhiteSpaceComment();
 
-        p.eat(TT.ColonToken);
+        p.eat(TT.ColonToken) orelse return null;
 
         declaration.ws2 = p.consumeWhiteSpaceComment();
 
-        const value = p.parseDeclValue(property.?.is_custom_property);
+        const value = p.parseDeclValue(property.?.is_custom_property, is_in_block);
 
         if (value) |_val| {
             declaration.value = _val;
@@ -1631,14 +1802,18 @@ pub const Parser = struct {
 
         declaration.ws3 = p.consumeWhiteSpaceComment();
 
-        var expected_tts = [3]TT{ TT.SemicolonToken, TT.RightBraceToken, TT.EOF };
-        p.eatOptional(expected_tts[0..]);
+        if (is_in_block) {
+            var expected_tts = [3]TT{ TT.SemicolonToken, TT.RightBraceToken, TT.EOF };
+            p.eatOptional(expected_tts[0..]) orelse return null;
+        } else {
+            if (p.current().tok_type != TT.RightParenthesisToken) return null;
+        }
 
         p.addLocation(&declaration.loc, _start);
         return declaration;
     }
 
-    fn parseDeclValue(p: *Parser, is_custom_property: bool) ?DeclValue {
+    fn parseDeclValue(p: *Parser, is_custom_property: bool, is_in_block: bool) ?DeclValue {
         var value = DeclValue.init(p._a);
         const _start = p.start;
 
@@ -1649,7 +1824,13 @@ pub const Parser = struct {
         const to_parse_value = if (is_custom_property) p.options.parse_custom_property else p.options.parse_value;
 
         if (to_parse_value) {
-            const seq = p.readSequence(&[_]TT{ TT.SemicolonToken, TT.RightBraceToken, TT.EOF }, null);
+            var seq: ?ArrayList(CSSNode) = null;
+            if (is_in_block) {
+                seq = p.readSequence(&[_]TT{ TT.SemicolonToken, TT.RightBraceToken, TT.EOF }, null);
+            } else {
+                seq = p.readSequence(&[_]TT{TT.RightParenthesisToken}, null);
+            }
+
             if (seq) |_seq| {
                 value.children = _seq;
             } else {
@@ -1735,13 +1916,13 @@ pub const Parser = struct {
                         return null;
                     }
                 },
-                TT.DimensionToken => {
+                TT.DimensionToken,
+                TT.StringToken,
+                TT.DelimToken,
+                TT.ColonToken,
+                => {
                     const dim_node = p.cursor;
                     arr.append(CSSNode{ .misc_token = dim_node }) catch unreachable;
-                    tok = p.nextTok();
-                },
-                TT.StringToken => {
-                    arr.append(CSSNode{ .misc_token = p.cursor }) catch unreachable;
                     tok = p.nextTok();
                 },
                 else => {
@@ -1780,10 +1961,9 @@ pub const Parser = struct {
         func.name = p.cursor;
         p.advance();
 
-        if (std.mem.eql(u8, p.getTokenString(name), "var(")) att: {
-            const css_var: CSSVariable = p.parseCSSVariable() catch {
-                break :att;
-            };
+
+        if (eqlStr(p.getTokenString(name), "var(")) {
+            const css_var: CSSVariable = p.parseCSSVariable() orelse return null;
             if (p.current().tok_type == TT.RightParenthesisToken) {
                 func.children.append(CSSNode{ .variable = css_var }) catch unreachable;
                 p.advance();
@@ -1802,7 +1982,7 @@ pub const Parser = struct {
             return null;
         }
 
-        if (!p.end()) p.eat(TT.RightParenthesisToken);
+        if (!p.end()) p.eat(TT.RightParenthesisToken) orelse return null;
 
         p.addLocation(&func.loc, _start);
 
@@ -1898,10 +2078,10 @@ pub const Parser = struct {
         const tt: TT = tok.tok_type;
 
         if (tt == TT.DelimToken) {
-            switch (p.getTokenString(tok)[0]) {
+            switch (p.getCurrentChar()) {
                 '-' => {
                     tok = p.nextTok();
-                    if (tok.tok_type == TT.DelimToken and p.getTokenString(tok)[0] == '-') {
+                    if (tok.tok_type == TT.DelimToken and p.getCurrentChar() == '-') {
                         property.is_custom_property = true;
                         property.children.append(p.cursor - 1) catch unreachable;
                         property.children.append(p.cursor) catch unreachable;
@@ -1931,7 +2111,7 @@ pub const Parser = struct {
         }
 
         if (tok.tok_type == TT.HashToken) {
-            p.eat(TT.HashToken);
+            p.eat(TT.HashToken) orelse return null;
         } else if (tok.tok_type == TT.IdentToken) {
             property.children.append(p.cursor) catch unreachable;
             p.advance();
@@ -1949,6 +2129,10 @@ pub const Parser = struct {
 
     fn printLoc(p: *Parser, loc: Location) void {
         std.debug.print("print-loc: __{s}__\n", .{p.code[loc.start..loc.end]});
+    }
+
+    fn printCurrTok(p: *Parser) void {
+        p.printToken(p.current());
     }
 
     fn printToken(p: *Parser, tok: Token) void {

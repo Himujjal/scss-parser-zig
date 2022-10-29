@@ -35,6 +35,7 @@ const Block = nodes.Block;
 const StyleSheet = nodes.StyleSheet;
 const Location = nodes.CSSLocation;
 const URL = nodes.URL;
+const CSSVariable = nodes.CSSVariable;
 
 const MediaQueryList = nodes.MediaQueryList;
 const MediaQuery = nodes.MediaQuery;
@@ -55,6 +56,15 @@ const MfBoolean = nodes.MfBoolean;
 const MfRange = nodes.MfRange;
 const Ratio = nodes.Ratio;
 const MfRangeOp = nodes.MfRangeOp;
+
+const SupportsCondition = nodes.SupportsCondition;
+const NotSupportsInParens = nodes.NotSupportsInParens;
+const SupportsInParensAndOr = nodes.SupportsInParensAndOr;
+const SupportsConditionWithParens = nodes.SupportsConditionWithParens;
+const SupportsFeature = nodes.SupportsFeature;
+const SupportsDecl = nodes.SupportsDecl;
+const SupportsSelectorFn = nodes.SupportsSelectorFn;
+const SupportsInParens = nodes.SupportsInParens;
 
 const concatStrings = utils.concatStrings;
 
@@ -120,7 +130,7 @@ pub const Renderer = struct {
             .brackets => "",
             .class_selector => "",
             .combinator => "",
-            .declaration => |d| r.renderDeclaration(d),
+            .declaration => |d| r.renderDeclaration(d, true),
             .declaration_list => |dl| r.renderDeclarationList(dl),
             .dimension => "",
             .function_node => |f| r.renderFunctionNode(f),
@@ -130,6 +140,7 @@ pub const Renderer = struct {
             .media_feature => "",
             .media_query => |mq| r.renderMediaQuery(mq),
             .media_query_list => |mql| r.renderMediaQueryList(mql),
+            .supports => |sc| r.renderSupportsCondition(sc),
             .nth => "",
             .number_node => "",
             .operator => "",
@@ -141,7 +152,7 @@ pub const Renderer = struct {
             .ratio => |ra| r.renderRatio(ra),
             .raw => "",
             .rule => |_r| r.renderRule(_r),
-            .variable => "",
+            .variable => |v| r.renderCSSVariable(v),
             .string_node => |s| r.renderString(s),
             .percentage => "",
             .style_sheet => "",
@@ -184,6 +195,10 @@ pub const Renderer = struct {
     fn renderAtRulePrelude(r: *Renderer, at_rule_prelude: AtrulePrelude) []const u8 {
         return r.renderSequenceCSSNode(at_rule_prelude.children);
     }
+
+	fn renderCSSVariable(r: *Renderer, v: CSSVariable) []const u8 {
+		return r.renderToken(v);
+	}
 
     fn renderRule(r: *Renderer, rule: Rule) []const u8 {
         return r.concat(r.renderPrelude(rule.prelude), r.renderBlock(rule.block));
@@ -311,6 +326,79 @@ pub const Renderer = struct {
         return res;
     }
 
+    fn renderSupportsCondition(r: *Renderer, sc: SupportsCondition) []const u8 {
+        return switch (sc) {
+            .not_supports_in_parens => |nsip| r.renderNotSupportsInParens(nsip.*),
+            .supports_in_parens_and_or => |sipao| r.renderSupportsInParensAndOr(sipao.*),
+        };
+    }
+
+    fn renderNotSupportsInParens(r: *Renderer, nsip: NotSupportsInParens) []const u8 {
+		var res: []const u8 = "not";
+		res = r.concatWS(res, nsip.ws1);
+		res = r.concat(res, r.renderSupportsInParens(nsip.supports_parens));
+        return res;
+    }
+
+    fn renderSupportsInParensAndOr(r: *Renderer, sipao: SupportsInParensAndOr) []const u8 {
+        var res: []const u8 = "";
+
+        const is_and = sipao.is_and;
+        const len = sipao.list_supports_in_parens.items.len;
+        for (sipao.list_supports_in_parens.items) |list_supports_in_parens, i| {
+            res = r.concat(res, r.renderSupportsInParens(list_supports_in_parens));
+
+            if (i < len - 1) {
+                const ws1 = sipao.ws1_list.items[i];
+                res = r.concatWS(res, ws1);
+                res = r.concat(res, if (is_and) "and" else "or");
+                const ws2 = sipao.ws2_list.items[i];
+                res = r.concatWS(res, ws2);
+            }
+        }
+
+        return res;
+    }
+
+    fn renderSupportsInParens(r: *Renderer, sip: SupportsInParens) []const u8 {
+        return switch (sip) {
+            .supports_condition => |sc| r.renderSupportsConditionWithParens(sc.*),
+            .supports_feature => |sf| r.renderSupportsFeature(sf),
+            .general_enclosed => |ge| r.renderGeneralEnclosed(ge),
+        };
+    }
+
+    fn renderSupportsConditionWithParens(r: *Renderer, sc: SupportsConditionWithParens) []const u8 {
+        var res: []const u8 = "";
+        res = r.concat(res, "(");
+        res = r.concatWS(res, sc.ws1);
+        res = r.concat(res, r.renderSupportsCondition(sc.condition));
+        res = r.concatWS(res, sc.ws2);
+        res = r.concat(res, ")");
+        return res;
+    }
+
+    fn renderSupportsFeature(r: *Renderer, sf: SupportsFeature) []const u8 {
+        return switch (sf) {
+            .supports_decl => |sd| r.renderSupportsDecl(sd.*),
+            .supports_selector_fn => |ssf| r.renderSupportsSelectorFn(ssf.*),
+        };
+    }
+
+    fn renderSupportsDecl(r: *Renderer, sd: SupportsDecl) []const u8 {
+        var res: []const u8 = "";
+        res = r.concat(res, "(");
+        res = r.concatWS(res, sd.ws1);
+        res = r.concat(res, r.renderDeclaration(sd.declaration, false));
+        res = r.concatWS(res, sd.ws2);
+        res = r.concat(res, ")");
+        return res;
+    }
+
+    fn renderSupportsSelectorFn(r: *Renderer, ssf: SupportsSelectorFn) []const u8 {
+        return r.renderFunctionNode(ssf);
+    }
+
     fn renderMediaQuery(r: *Renderer, mq: MediaQuery) []const u8 {
         var res: []const u8 = "";
         res = r.concatWS(res, mq.ws1);
@@ -354,7 +442,7 @@ pub const Renderer = struct {
         var res: []const u8 = "";
 
         if (rm.is_not) |is_not| {
-            res = r.concat(res, if (is_not) "not" else "else");
+            res = r.concat(res, if (is_not) "not" else "only");
         }
         res = r.concatWS(res, rm.ws1);
         res = r.concat(res, r.renderToken(rm.media_type));
@@ -369,10 +457,10 @@ pub const Renderer = struct {
         return res;
     }
     fn renderMediaConditionWithoutOr(r: *Renderer, rm: MediaConditionWithoutOr) []const u8 {
-		return switch(rm) {
-			.media_not => |mn| r.renderMediaNot(mn.*),
-			.media_and => |ma| r.renderMediaAndOr(ma.*),
-		};
+        return switch (rm) {
+            .media_not => |mn| r.renderMediaNot(mn.*),
+            .media_and => |ma| r.renderMediaAndOr(ma.*),
+        };
     }
     fn renderMediaNot(r: *Renderer, rm: MediaNot) []const u8 {
         var res: []const u8 = "";
@@ -390,7 +478,7 @@ pub const Renderer = struct {
         res = r.concat(res, switch (rm.content) {
             .media_condition => |mc| r.renderMediaCondition(mc),
             .media_feature => |mf| r.renderMediaFeature(mf),
-            .general_enclosed => |ge| r.renderGeneralEnclosed(ge.*),
+            .general_enclosed => |ge| r.renderGeneralEnclosed(ge),
         });
 
         res = r.concatWS(res, rm.ws2);
@@ -399,22 +487,22 @@ pub const Renderer = struct {
     }
 
     fn renderGeneralEnclosed(r: *Renderer, ge: GeneralEnclosed) []const u8 {
-		return switch(ge) {
-			.function => |func| r.renderFunctionNode(func.*),
-			.ident => |ident| r.renderGeneralEnclosedIndent(ident.*),
-		};
+        return switch (ge) {
+            .function => |func| r.renderFunctionNode(func.*),
+            .ident => |ident| r.renderGeneralEnclosedIndent(ident.*),
+        };
     }
     fn renderGeneralEnclosedIndent(r: *Renderer, gei: GeneralEnclosedIndent) []const u8 {
-		_ = r;
-		_ = gei;
-		return "";
+        _ = r;
+        _ = gei;
+        return "";
     }
 
     fn renderMfPlain(r: *Renderer, rm: MfPlain) []const u8 {
         var res: []const u8 = "";
         res = r.concat(res, r.renderToken(rm.name));
         res = r.concatWS(res, rm.ws1);
-		res = r.concat(res, ":");
+        res = r.concat(res, ":");
         res = r.concatWS(res, rm.ws2);
         res = r.concat(res, r.renderMfValue(rm.value));
         return res;
@@ -472,11 +560,11 @@ pub const Renderer = struct {
 
     fn renderDeclarationList(r: *Renderer, dl: DeclarationList) []const u8 {
         var res: []const u8 = "";
-        for (dl.children.items) |decl| res = r.concat(res, r.renderDeclaration(decl));
+        for (dl.children.items) |decl| res = r.concat(res, r.renderDeclaration(decl, true));
         return res;
     }
 
-    fn renderDeclaration(r: *Renderer, decl: Declaration) []const u8 {
+    fn renderDeclaration(r: *Renderer, decl: Declaration, is_in_block: bool) []const u8 {
         var res: []const u8 = "";
         res = r.concat(res, r.renderArrayOfTokens(decl.property.children));
         if (decl.ws1) |ws1| res = r.concat(res, r.renderArrayOfTokens(ws1));
@@ -485,7 +573,7 @@ pub const Renderer = struct {
         for (decl.value.children.items) |cssnode| res = r.concat(res, r.renderCSSNode(cssnode));
         if (decl.important or decl.value.important) res = r.concat(res, " !important");
         if (decl.ws3) |ws3| res = r.concat(res, r.renderArrayOfTokens(ws3));
-        res = r.concat(res, ";");
+        if (is_in_block) res = r.concat(res, ";");
         return res;
     }
 
@@ -498,8 +586,8 @@ pub const Renderer = struct {
     }
 
     fn renderString(r: *Renderer, string_index: usize) []const u8 {
-		const string_tok: Token = r.tokens.items[string_index];
-		const string = r.code[string_tok.start + 1..string_tok.end - 1];
+        const string_tok: Token = r.tokens.items[string_index];
+        const string = r.code[string_tok.start + 1 .. string_tok.end - 1];
         return r.concat("\"", r.concat(string, "\""));
     }
 
