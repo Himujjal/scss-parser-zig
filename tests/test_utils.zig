@@ -35,7 +35,7 @@ pub fn testFile(comptime folder: []const u8, comptime file_without_ext: []const 
         switch (sub_test) {
             .Object => |_sub_test| {
                 // const options = getOptions(_sub_test);
-				const options = CSSParserOptions{};
+                const options = CSSParserOptions{};
                 if (_sub_test.get("source")) |src| {
                     print(COLOR_LIGHT_BLUE ++ "\t>>>>> '{s} > {s}' Test\n" ++ COLOR_RESET, .{ test_name, key });
 
@@ -61,7 +61,11 @@ pub fn testFile(comptime folder: []const u8, comptime file_without_ext: []const 
                         const GOT = BACK_RED ++ "{s}" ++ COLOR_RESET;
                         print(ERROR ++ "EXPECTED: " ++ EXPECTED ++ " | GOT: " ++ GOT ++ "\n", .{ expected, output });
 
-                        if (generated_str.len > 0) std.debug.print("Also Possible: __{s}__", .{generated_str});
+                        if (generated_str.len > 0) {
+                            const STR = BACK_GREEN ++ "{s}\n" ++ COLOR_RESET;
+                            print("\t\tAlso Possible: " ++ STR, .{generated_str});
+                        }
+
                         p.deinit();
                         r.deinit();
                         return err;

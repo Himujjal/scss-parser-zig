@@ -66,6 +66,10 @@ const SupportsDecl = nodes.SupportsDecl;
 const SupportsSelectorFn = nodes.SupportsSelectorFn;
 const SupportsInParens = nodes.SupportsInParens;
 
+const PageSelectorList = nodes.PageSelectorList;
+const PageSelector = nodes.PageSelector;
+const PageSelectorPseudoPage = nodes.PageSelectorPseudoPage;
+
 const concatStrings = utils.concatStrings;
 
 /// Takes the CSS AST and outputs the results as a CSS file
@@ -141,6 +145,7 @@ pub const Renderer = struct {
             .media_query => |mq| r.renderMediaQuery(mq),
             .media_query_list => |mql| r.renderMediaQueryList(mql),
             .supports => |sc| r.renderSupportsCondition(sc),
+            .page_selector_list => |psl| r.renderPageSelectorList(psl),
             .nth => "",
             .number_node => "",
             .operator => "",
@@ -150,7 +155,7 @@ pub const Renderer = struct {
             .pseudo_class_selector => "",
             .pseudo_element_selector => "",
             .ratio => |ra| r.renderRatio(ra),
-            .raw => "",
+            .raw => |raw| r.renderRaw(raw),
             .rule => |_r| r.renderRule(_r),
             .variable => |v| r.renderCSSVariable(v),
             .string_node => |s| r.renderString(s),
@@ -163,7 +168,7 @@ pub const Renderer = struct {
             .value => "",
             .misc_token => |m| r.renderToken(m),
             .comment => |w| r.renderToken(w),
-            .whitespace => |w| r.renderToken(w),
+            .whitespaces => |w| r.renderArrayOfTokens(w),
             .cdo => "",
             .cdc => "",
             ._error => "",
@@ -196,9 +201,9 @@ pub const Renderer = struct {
         return r.renderSequenceCSSNode(at_rule_prelude.children);
     }
 
-	fn renderCSSVariable(r: *Renderer, v: CSSVariable) []const u8 {
-		return r.renderToken(v);
-	}
+    fn renderCSSVariable(r: *Renderer, v: CSSVariable) []const u8 {
+        return r.renderToken(v);
+    }
 
     fn renderRule(r: *Renderer, rule: Rule) []const u8 {
         return r.concat(r.renderPrelude(rule.prelude), r.renderBlock(rule.block));
@@ -225,12 +230,13 @@ pub const Renderer = struct {
         for (selector.children.items) |_s| {
             res = r.concat(res, switch (_s) {
                 .type_selector => |_t| r.renderTypeSelector(_t),
-                .id => |_id| r.renderToken(_id),
+                .id => |_id| r.concat("#", r.renderToken(_id)),
                 .class => |_class| r.renderClassSelector(_class[1]),
                 .psuedo_class => |_psuedo_class| r.renderPsuedoClassSelector(_psuedo_class),
                 .pseudo_element => |_pseudo_element| r.renderPseudoElementSelector(_pseudo_element),
                 .combinator => |_combinator| r.renderCombinatorSelector(_combinator),
                 .attribute_selector => |_as| r.renderAttributeSelector(_as),
+				.percent => |d| r.renderToken(d),
             });
         }
         return res;
@@ -254,8 +260,34 @@ pub const Renderer = struct {
         return res;
     }
 
+    fn renderPageSelectorList(r: *Renderer, psl: PageSelectorList) []const u8 {
+        var res: []const u8 = "";
+        for (psl.items) |ps| {
+            res = r.concat(res, r.renderPageSelector(ps));
+        }
+        return res;
+    }
+
+	fn renderPageSelector(r: *Renderer, ps: PageSelector) []const u8 {
+		var res: []const u8 = "";
+		if (ps.ident) |id| res = r.concat(res, r.renderToken(id));
+		res = r.concatWS(res, ps.ws1);
+		for (ps.pseudo_pages.items) |page_selector_branch| {
+			res = r.concat(res, r.renderPageSelectorBranch(page_selector_branch));
+		}
+		res = r.concatWS(res, ps.ws2);
+		return res;
+	}
+
+	fn renderPageSelectorBranch(r: *Renderer, psb: PageSelectorPseudoPage) []const u8 {
+		var res: []const u8 = "";
+		res = r.concatWS(res, psb.ws1);
+		res = r.concat(res, r.renderToken(psb.pseudo_page[0]));
+		res = r.concat(res, r.renderToken(psb.pseudo_page[1]));
+		return res;
+	}
+
     fn renderIdSelector(r: *Renderer, id: usize) []const u8 {
-        std.debug.print("{d}\n", .{id});
         return r.concat("#", r.renderToken(id));
     }
 
@@ -334,9 +366,9 @@ pub const Renderer = struct {
     }
 
     fn renderNotSupportsInParens(r: *Renderer, nsip: NotSupportsInParens) []const u8 {
-		var res: []const u8 = "not";
-		res = r.concatWS(res, nsip.ws1);
-		res = r.concat(res, r.renderSupportsInParens(nsip.supports_parens));
+        var res: []const u8 = "not";
+        res = r.concatWS(res, nsip.ws1);
+        res = r.concat(res, r.renderSupportsInParens(nsip.supports_parens));
         return res;
     }
 

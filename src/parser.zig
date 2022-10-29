@@ -79,6 +79,10 @@ const SupportsDecl = nodes.SupportsDecl;
 const SupportsSelectorFn = nodes.SupportsSelectorFn;
 const SupportsInParens = nodes.SupportsInParens;
 
+const PageSelectorList = nodes.PageSelectorList;
+const PageSelector = nodes.PageSelector;
+const PageSelectorPseudoPage = nodes.PageSelectorPseudoPage;
+
 const URL = nodes.URL;
 // =======================================================================================
 
@@ -267,7 +271,7 @@ pub const Parser = struct {
             p.cursor += 1;
             return p.tokens.items[p.cursor];
         } else {
-            return p.tokens.items[p.cursor];
+            return p.tokens.items[p.cursor - 1];
         }
     }
 
@@ -364,18 +368,6 @@ pub const Parser = struct {
         return p.tokens.items[p.token_len - 1];
     }
 
-    fn appendWSCommentsCSSNode(p: *Parser, t: anytype) void {
-        var ws_comments = p.consumeWhiteSpaceCommentCSSNode();
-        t.children.appendSlice(ws_comments.toOwnedSlice()) catch unreachable;
-    }
-
-    fn appendWSComments(p: *Parser, t: anytype) void {
-        if (p.consumeWhiteSpaceComment()) |ws_comments| {
-            var ws = ws_comments;
-            t.children.appendSlice(ws.toOwnedSlice()) catch unreachable;
-        }
-    }
-
     // ======================= All Parse Rules ===============================
 
     fn parseStylesheet(p: *Parser) StyleSheet {
@@ -397,17 +389,10 @@ pub const Parser = struct {
                     node = CSSNode{ .cdc = p.cursor };
                     tok = p.nextTok();
                 },
-                .WhitespaceToken => {
+                .WhitespaceToken, .CommentToken => {
                     if (!p.options.skip_ws_comments) {
-                        node = CSSNode{ .whitespace = p.cursor };
+                        node = CSSNode{ .whitespaces = p.consumeWhiteSpaceComment().? };
                     }
-                    tok = p.nextTok();
-                },
-                .CommentToken => {
-                    if (!p.options.skip_ws_comments) {
-                        node = CSSNode{ .comment = p.cursor };
-                    }
-                    tok = p.nextTok();
                 },
                 .ErrorToken => {
                     p.addError(ParserErrorType.ErrorTokenFound);
@@ -449,7 +434,7 @@ pub const Parser = struct {
             return null;
         }
 
-        const block = p.parseBlock(true);
+        const block = p.parseBlock(true, false);
 
         var rule: Rule = Rule.init(p._a);
         rule.prelude = prelude.?;
@@ -494,7 +479,7 @@ pub const Parser = struct {
             TT.SemicolonToken => {},
             TT.LeftBraceToken => {
                 // TODO: Parse this at-rule
-                const block = p.parseBlock(true);
+                const block = p.parseBlock(true, true);
                 at_rule.block = block;
             },
             else => {
@@ -543,24 +528,24 @@ pub const Parser = struct {
             AtKeywordTypes.ColorProfile => {
                 tok = p.current();
                 var ws_comments = p.consumeWhiteSpaceCommentCSSNode();
-                at_rule_prelude.children.appendSlice(ws_comments.toOwnedSlice()) catch unreachable;
+                if (ws_comments) |w| at_rule_prelude.children.append(w) catch unreachable;
 
                 // css_var = p.parseCSSVariable() catch CSSNode{ .raw = p.parseRaw([]TT{ TT.LeftBraceToken, TT.SemicolonToken }) };
 
                 ws_comments = p.consumeWhiteSpaceCommentCSSNode();
-                at_rule_prelude.children.appendSlice(ws_comments.toOwnedSlice()) catch unreachable;
+                if (ws_comments) |w| at_rule_prelude.children.append(w) catch unreachable;
             },
             AtKeywordTypes.CounterStyle => {
                 tok = p.current();
                 var ws_comments = p.consumeWhiteSpaceCommentCSSNode();
-                at_rule_prelude.children.appendSlice(ws_comments.toOwnedSlice()) catch unreachable;
+                if (ws_comments) |w| at_rule_prelude.children.append(w) catch unreachable;
 
                 if (p.current().tok_type == TT.IdentToken) {
                     at_rule_prelude.children.append(CSSNode{ .identifier = p.cursor }) catch unreachable;
                 }
 
                 var ws_comments2 = p.consumeWhiteSpaceCommentCSSNode();
-                at_rule_prelude.children.appendSlice(ws_comments2.toOwnedSlice()) catch unreachable;
+                if (ws_comments2) |w| at_rule_prelude.children.append(w) catch unreachable;
             },
             AtKeywordTypes.FontFace => {
                 if (p.readSequence(&[_]TT{TT.LeftBraceToken}, '{')) |seq| {
@@ -586,7 +571,7 @@ pub const Parser = struct {
                     },
                 }
                 var ws_css_nodep = p.consumeWhiteSpaceCommentCSSNode();
-                at_rule_prelude.children.appendSlice(ws_css_nodep.toOwnedSlice()) catch unreachable;
+                if (ws_css_nodep) |w| at_rule_prelude.children.append(w) catch unreachable;
 
                 tok = p.current();
 
@@ -609,7 +594,7 @@ pub const Parser = struct {
             },
             AtKeywordTypes.Keyframes => {
                 var ws_comments = p.consumeWhiteSpaceCommentCSSNode();
-                at_rule_prelude.children.appendSlice(ws_comments.toOwnedSlice()) catch unreachable;
+                if (ws_comments) |w| at_rule_prelude.children.append(w) catch unreachable;
 
                 tok = p.current();
                 if (tok.tok_type == TT.IdentToken) {
@@ -617,29 +602,30 @@ pub const Parser = struct {
                 } else if (tok.tok_type == TT.StringToken) {
                     at_rule_prelude.children.append(CSSNode{ .string_node = p.cursor }) catch unreachable;
                 }
-                var ws_comments2 = p.consumeWhiteSpaceCommentCSSNode();
-                at_rule_prelude.children.appendSlice(ws_comments2.toOwnedSlice()) catch unreachable;
+                var ws_comments_2 = p.consumeWhiteSpaceCommentCSSNode();
+                if (ws_comments_2) |w| at_rule_prelude.children.append(w) catch unreachable;
             },
             AtKeywordTypes.Layer => {
                 var ws_comments = p.consumeWhiteSpaceCommentCSSNode();
-                at_rule_prelude.children.appendSlice(ws_comments.toOwnedSlice()) catch unreachable;
+                if (ws_comments) |w| at_rule_prelude.children.append(w) catch unreachable;
 
                 tok = p.current();
                 while (tok.tok_type != TT.LeftBraceToken or tok.tok_type != TT.SemicolonToken) {
                     ws_comments = p.consumeWhiteSpaceCommentCSSNode();
-                    at_rule_prelude.children.appendSlice(ws_comments.toOwnedSlice()) catch unreachable;
+                    if (ws_comments) |w| at_rule_prelude.children.append(w) catch unreachable;
+
                     if (tok.tok_type == TT.IdentToken) {
                         at_rule_prelude.children.append(CSSNode{ .identifier = p.cursor }) catch unreachable;
                         tok = p.nextTok();
                         var ws_comments_2 = p.consumeWhiteSpaceCommentCSSNode();
-                        at_rule_prelude.children.appendSlice(ws_comments_2.toOwnedSlice()) catch unreachable;
+                        if (ws_comments_2) |w| at_rule_prelude.children.append(w) catch unreachable;
 
                         tok = p.current();
 
                         if (tok.tok_type != TT.DelimToken or p.getCurrentChar() != ',') continue;
 
                         var ws_comments_3 = p.consumeWhiteSpaceCommentCSSNode();
-                        at_rule_prelude.children.appendSlice(ws_comments_3.toOwnedSlice()) catch unreachable;
+                        if (ws_comments_3) |w| at_rule_prelude.children.append(w) catch unreachable;
 
                         tok = p.current();
 
@@ -649,7 +635,7 @@ pub const Parser = struct {
                     at_rule_prelude.children.append(CSSNode{ .raw = raw }) catch unreachable;
                 }
 
-                p.appendWSCommentsCSSNode(&at_rule_prelude);
+                // p.appendWSCommentsCSSNode(&at_rule_prelude);
                 // ws_comments = p.consumeWhiteSpaceCommentCSSNode();
                 // at_rule_prelude.children.appendslice(ws_comments.toOwnedSlice()) catch unreachable;
             },
@@ -657,16 +643,12 @@ pub const Parser = struct {
                 // TODO: Namespace
             },
             AtKeywordTypes.Page => {
-                // TODO: Pages
-                if (p.parseSupportsCondition()) |supports_condition| {
-                    at_rule_prelude.children.append(CSSNode{ .supports = supports_condition }) catch unreachable;
+                if (p.parsePageSelectorList()) |page_selector_list| {
+                    at_rule_prelude.children.append(CSSNode{ .page_selector_list = page_selector_list }) catch unreachable;
                 } else {
                     p.cursor = _start;
                     p.start = _start;
-                    p.parseAtRulePreludeRaw(
-                        &at_rule_prelude.children,
-                        &[_]TT{ TT.LeftParenthesisToken, TT.SemicolonToken, TT.RightBraceToken },
-                    );
+                    p.parseAtRulePreludeRaw(&at_rule_prelude.children, &[_]TT{ TT.SemicolonToken, TT.LeftBraceToken });
                 }
             },
             AtKeywordTypes.Supports => {
@@ -685,6 +667,55 @@ pub const Parser = struct {
 
         p.addLocation(&at_rule_prelude.loc, _start);
         return at_rule_prelude;
+    }
+
+    fn parsePageSelectorList(p: *Parser) ?PageSelectorList {
+        var page_selector_list = PageSelectorList.init(p._a);
+
+        var tok = p.current();
+        while (!p.end()) {
+            const _start = p.start;
+            var page_selector: PageSelector = PageSelector.init(p._a);
+
+            if (tok.tok_type == TT.IdentToken) {
+                page_selector.ident = p.cursor;
+                tok = p.nextTok();
+                page_selector.ws1 = p.consumeWhiteSpaceComment();
+                tok = p.current();
+            }
+
+            while (!p.end()) {
+                const ws1 = p.consumeWhiteSpaceComment();
+                tok = p.current();
+                if (tok.tok_type == TT.ColonToken) {
+                    const colon = p.cursor;
+                    tok = p.nextTok();
+                    if (tok.tok_type == TT.IdentToken) {
+                        const ident = p.cursor;
+                        tok = p.nextTok();
+                        const pseudo_page = [2]usize{ colon, ident };
+                        const page_selector_branch = PageSelectorPseudoPage{
+                            .ws1 = ws1,
+                            .pseudo_page = pseudo_page,
+                        };
+                        page_selector.ws2 = p.consumeWhiteSpaceComment();
+                        page_selector.pseudo_pages.append(page_selector_branch) catch unreachable;
+                    } else break;
+                } else {
+                    break;
+                }
+
+                tok = p.current();
+            }
+            p.addLocation(&page_selector.loc, _start);
+
+            page_selector_list.append(page_selector) catch unreachable;
+
+            if (tok.tok_type != .CommaToken) break;
+            tok = p.nextTok();
+        }
+
+        return page_selector_list;
     }
 
     fn parseSupportsCondition(p: *Parser) ?SupportsCondition {
@@ -824,10 +855,10 @@ pub const Parser = struct {
             p.addLocation(&loc, _start);
             return p.cursor - 1;
         } else if (tok.tok_type == .CustomPropertyNameToken) {
-			const var_name = p.cursor; 
-			p.advance();
-			return var_name;
-		}
+            const var_name = p.cursor;
+            p.advance();
+            return var_name;
+        }
         return null;
     }
 
@@ -1439,7 +1470,7 @@ pub const Parser = struct {
             },
             TT.HashToken => {
                 p.advance();
-                return SingleSelector{ .id = p.cursor - 1 };
+                return SingleSelector{ .id = p.cursor };
             },
             TT.LeftBracketToken => {
                 curr = p.nextTok();
@@ -1473,6 +1504,11 @@ pub const Parser = struct {
                 p.addLocation(&comb.loc, _start);
                 return SingleSelector{ .combinator = comb };
             },
+			TT.PercentageToken => {
+				const dim = p.cursor;
+				p.advance();
+				return SingleSelector{ .percent = dim };
+			},
             else => {
                 p.addError(ParserErrorType{
                     .ExpectedTokenFoundThis = .{
@@ -1710,7 +1746,7 @@ pub const Parser = struct {
     }
 
     // is_declaration is 'false' if its a atrule block
-    fn parseBlock(p: *Parser, is_declaration: bool) Block {
+    fn parseBlock(p: *Parser, is_declaration: bool, is_nested: bool) Block {
         var block = Block.init(p._a);
         const _start = p.start;
         _ = p.eat(TT.LeftBraceToken);
@@ -1722,24 +1758,40 @@ pub const Parser = struct {
                     TT.RightBraceToken => break,
                     WT, TT.CommentToken => {
                         var ws_comments = p.consumeWhiteSpaceCommentCSSNode();
-                        block.children.appendSlice(ws_comments.toOwnedSlice()) catch unreachable;
+                        if (ws_comments) |w| block.children.append(w) catch unreachable;
                     },
                     TT.AtKeywordToken => {
                         var at_rule = p.parseAtRule();
                         block.children.append(CSSNode{ .at_rule = at_rule }) catch unreachable;
                     },
                     else => {
+                        const checkpoint = p.cursor;
                         var declaration = p.parseDeclaration(true);
                         if (declaration) |d| {
                             block.children.append(CSSNode{ .declaration = d }) catch unreachable;
+                            if (p.consumeWhiteSpaceComment()) |ws| block.children.append(CSSNode{ .whitespaces = ws }) catch unreachable;
                         } else {
-                            p.cursor = _start;
-                            const raw = p.parseRaw(&[_]TT{ TT.EOF, TT.RightBraceToken, TT.SemicolonToken }, null);
-                            block.children.append(CSSNode{ .raw = raw }) catch unreachable;
+                            p.cursor = checkpoint;
+                            if (is_nested) {
+                                if (p.parseRule()) |rule| {
+                                    block.children.append(CSSNode{ .rule = rule }) catch unreachable;
+                                } else {
+                                    p.cursor = _start;
+                                    const raw = p.parseRaw(&[_]TT{ TT.EOF, TT.RightBraceToken, TT.SemicolonToken }, null);
+                                    block.children.append(CSSNode{ .raw = raw }) catch unreachable;
+                                }
+                            } else {
+                                p.cursor = _start;
+                                const raw = p.parseRaw(&[_]TT{ TT.EOF, TT.RightBraceToken, TT.SemicolonToken }, null);
+                                block.children.append(CSSNode{ .raw = raw }) catch unreachable;
+                            }
                         }
                     },
                 }
             }
+
+            const ws = p.consumeWhiteSpaceComment();
+            if (ws) |w| block.children.append(CSSNode{ .whitespaces = w }) catch unreachable;
 
             if (!p.end()) {
                 _ = p.eat(TT.RightBraceToken);
@@ -1751,7 +1803,7 @@ pub const Parser = struct {
                     TT.RightBraceToken => break,
                     WT, TT.CommentToken => {
                         var ws_comments = p.consumeWhiteSpaceCommentCSSNode();
-                        block.children.appendSlice(ws_comments.toOwnedSlice()) catch unreachable;
+                        if (ws_comments) |w| block.children.append(w) catch unreachable;
                     },
                     TT.AtKeywordToken => {
                         const at_rule = p.parseAtRule();
@@ -1803,8 +1855,18 @@ pub const Parser = struct {
         declaration.ws3 = p.consumeWhiteSpaceComment();
 
         if (is_in_block) {
-            var expected_tts = [3]TT{ TT.SemicolonToken, TT.RightBraceToken, TT.EOF };
-            p.eatOptional(expected_tts[0..]) orelse return null;
+            const tt = p.current().tok_type;
+            if (tt == TT.SemicolonToken) {
+                p.advance();
+            } else if (tt == TT.RightBraceToken) {
+				// remove the whitespace
+				if (declaration.ws3) |ws3| {
+					const ws3_len = ws3.items.len;
+					p.cursor -= ws3_len;
+					ws3.deinit();
+					declaration.ws3 = null;
+				}
+			}
         } else {
             if (p.current().tok_type != TT.RightParenthesisToken) return null;
         }
@@ -1831,7 +1893,19 @@ pub const Parser = struct {
                 seq = p.readSequence(&[_]TT{TT.RightParenthesisToken}, null);
             }
 
-            if (seq) |_seq| {
+            if (seq) |s| {
+                var _seq = s;
+                // if there is whitespace at the end just remove them
+                if (_seq.items.len > 0) {
+                    const last = _seq.items[_seq.items.len - 1];
+                    switch (last) {
+                        .whitespaces => {
+                            const popped = _seq.pop();
+                            p.cursor -= popped.whitespaces.items.len;
+                        },
+                        else => {},
+                    }
+                }
                 value.children = _seq;
             } else {
                 p.cursor = _start;
@@ -1872,12 +1946,10 @@ pub const Parser = struct {
                 },
                 TT.CommentToken, TT.WhitespaceToken => {
                     if (!p.options.skip_ws_comments) {
-                        if (tok.tok_type == TT.CommentToken) {
-                            arr.append(CSSNode{ .comment = p.cursor }) catch unreachable;
-                        } else {
-                            arr.append(CSSNode{ .whitespace = p.cursor }) catch unreachable;
+                        if (p.consumeWhiteSpaceComment()) |w| {
+                            arr.append(CSSNode{ .whitespaces = w }) catch unreachable;
+                            tok = p.current();
                         }
-                        tok = p.nextTok();
                     }
                 },
                 TT.FunctionToken => {
@@ -1961,7 +2033,6 @@ pub const Parser = struct {
         func.name = p.cursor;
         p.advance();
 
-
         if (eqlStr(p.getTokenString(name), "var(")) {
             const css_var: CSSVariable = p.parseCSSVariable() orelse return null;
             if (p.current().tok_type == TT.RightParenthesisToken) {
@@ -2013,6 +2084,7 @@ pub const Parser = struct {
                             return true;
                         }
                     }
+                    p.printCurrTok();
                     return false;
                 }
                 return true;
@@ -2029,36 +2101,22 @@ pub const Parser = struct {
         return false;
     }
 
-    fn consumeWhiteSpaceCommentCSSNode(p: *Parser) ArrayList(CSSNode) {
-        var arr = ArrayList(CSSNode).init(p._a);
-        var t = p.current();
-        if (p.options.skip_ws_comments) {
-            while ((t.tok_type == TT.WhitespaceToken or t.tok_type == TT.CommentToken) and !p.end()) : (t = p.nextTok()) {}
-        } else {
-            t = p.current();
-            while ((t.tok_type == TT.WhitespaceToken or t.tok_type == TT.CommentToken) and !p.end()) : (t = p.nextTok()) {
-                if (!p.options.skip_ws_comments) {
-                    if (t.tok_type == TT.WhitespaceToken) {
-                        arr.append(CSSNode{ .whitespace = p.cursor }) catch unreachable;
-                    } else {
-                        arr.append(CSSNode{ .comment = p.cursor }) catch unreachable;
-                    }
-                }
-            }
-        }
-        return arr;
+    fn consumeWhiteSpaceCommentCSSNode(p: *Parser) ?CSSNode {
+        const ws = p.consumeWhiteSpaceComment() orelse return null;
+        return CSSNode{ .whitespaces = ws };
     }
 
     // Comsume WhiteSpace and Comment Until the
     fn consumeWhiteSpaceComment(p: *Parser) ?ArrayList(usize) {
+        if (p.end()) return null;
         var arr = ArrayList(usize).init(p._a);
         var t = p.current();
         if (p.options.skip_ws_comments) {
             while ((t.tok_type == TT.WhitespaceToken or t.tok_type == TT.CommentToken) and !p.end()) : (t = p.nextTok()) {}
         } else {
-            t = p.current();
-            while ((t.tok_type == TT.WhitespaceToken or t.tok_type == TT.CommentToken) and !p.end()) : (t = p.nextTok()) {
-                if (!p.options.skip_ws_comments) {
+            if (!p.end()) {
+                t = p.current();
+                while ((t.tok_type == TT.WhitespaceToken or t.tok_type == TT.CommentToken) and !p.end()) : (t = p.nextTok()) {
                     arr.append(p.cursor) catch unreachable;
                 }
             }
@@ -2137,6 +2195,10 @@ pub const Parser = struct {
 
     fn printToken(p: *Parser, tok: Token) void {
         std.debug.print("print-token: type={}, value=__{s}__\n", .{ tok.tok_type, p.code[tok.start..tok.end] });
+    }
+
+    fn printTokenFromIndex(p: *Parser, i: usize) void {
+        p.printToken(p.tokens.items[i]);
     }
 
     /// Allocate value to the heap and return the pointer

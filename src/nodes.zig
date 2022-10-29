@@ -79,6 +79,7 @@ pub const CSSNode = union(enum) {
     media_query: MediaQuery,
     media_query_list: MediaQueryList,
     supports: SupportsCondition,
+	page_selector_list: PageSelectorList,
     nth: Nth,
     number_node: Number,
     operator: Operator,
@@ -109,7 +110,7 @@ pub const CSSNode = union(enum) {
     misc_token: usize,
 
     comment: Comment,
-    whitespace: WS, // WhitespaceToken
+	whitespaces: ArrayList(usize),
     cdo: CDO,
     cdc: CDC,
     _error: _Error,
@@ -576,6 +577,27 @@ pub const SupportsDecl = struct {
 /// ('selector' | 'font-tech' | 'font-format')'(' <complex-selector> ')'
 pub const SupportsSelectorFn = FunctionNode;
 
+/// <page-selector> (',' <page-selector>)
+pub const PageSelectorList = ArrayList(PageSelector);
+
+/// <pseudo-page>+ | <ident> <pseudo-page>* 
+pub const PageSelector = struct {
+	loc: CSSLocation = default_location,
+	ident: ?usize = null,
+	ws1: ?ArrayList(usize) = null,
+	pseudo_pages: ArrayList(PageSelectorPseudoPage),
+	ws2: ?ArrayList(usize) = null,
+	pub fn init(a: Allocator) PageSelector {
+		return PageSelector{ .pseudo_pages = ArrayList(PageSelectorPseudoPage).init(a) };
+	}
+};
+
+/// :('left'|'right'|'first'|'blank')
+pub const PageSelectorPseudoPage = struct {
+	ws1: ?ArrayList(usize) = null,
+	pseudo_page: [2]usize,
+};
+
 /// <an-plus-b> | 'even' | 'odd'
 pub const Nth = struct {
     loc: CSSLocation = default_location,
@@ -675,6 +697,7 @@ pub const Selector = struct {
 pub const SingleSelector = union(enum) {
     type_selector: TypeSelector,
     id: usize,
+	percent: usize,
     class: [2]usize,
     psuedo_class: PseudoClassSelector,
     pseudo_element: PseudoElementSelector,
